@@ -7,6 +7,7 @@ let ICAO_Ranges = [
 	// Mostly generated from the assignment table in the appendix to Chapter 9 of
 	// Annex 10 Vol III, Second Edition, July 2007 (with amendments through 88-A, 14/11/2013)
 
+	{ start: 0x000000, end: 0x000000, country: "BPFV", flag_image: "Germany_bpfv.png" },
 	{ start: 0x004000, end: 0x0043FF, country: "Zimbabwe", flag_image: "Zimbabwe.png" },
 	{ start: 0x006000, end: 0x006FFF, country: "Mozambique", flag_image: "Mozambique.png" },
 	{ start: 0x008000, end: 0x00FFFF, country: "South Africa", flag_image: "South_Africa.png" },
