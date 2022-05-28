@@ -83,6 +83,9 @@ let lineWidth = 1.15;
 // Outline color for aircraft icons
 let OutlineADSBColor = '#000000';
 
+// Outline color for BPFV aircraft icons 
+let OutlineBPFVColor = '#FF4040';
+
 // Outline width for aircraft icons
 let outlineWidth = 1;
 
