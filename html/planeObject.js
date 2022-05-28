@@ -8,7 +8,22 @@ function PlaneObject(icao) {
 
     // Info about the plane
     this.icao      = icao;
-    this.icaorange = findICAORange(icao);
+    // BPFV plane?
+    if (typeof this.icao === 'string' && (
+        this.icao === '3eef53' || // TEST
+        this.icao === '3d08d7' || // PF
+        this.icao === '3d08df' || // PN
+        this.icao === '3d08e9' || // PX
+        this.icao === '3d08eb' || // PZ
+        this.icao === '3d1a5f' || // FV
+        this.icao === '3d2580' )) // LK
+    {
+        this.bpfvPlane = true;
+        this.icaorange = ICAO_Ranges[0];
+    } else {
+        this.bpfvPlane = false;
+        this.icaorange = findICAORange(icao);
+    }
 
     this.numHex = parseInt(icao.replace('~', '1'), 16);
     this.fakeHex = this.numHex > 16777215; // non-icao hex
