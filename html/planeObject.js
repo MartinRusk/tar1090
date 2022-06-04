@@ -19,7 +19,7 @@ function PlaneObject(icao) {
         this.icao === '3d2580' )) // LK
     {
         this.bpfvPlane = true;
-        this.icaorange = ICAO_Ranges[0];
+        this.icaorange = { start: 0x000000, end: 0x000000, country: "BPFV", flag_image: "Germany_bpfv.png" };
     } else {
         this.bpfvPlane = false;
         this.icaorange = findICAORange(icao);
