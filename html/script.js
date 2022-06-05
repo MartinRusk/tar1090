@@ -94,10 +94,14 @@ let labelScale = 1;
 let newWidth = lineWidth;
 let SiteOverride = false;
 let onJumpInput = null;
+let labelFillMarkup = null;
 let labelFill = null;
 let blackFill = null;
+let labelStrokeMarkup = null;
 let labelStroke = null;
+let labelStrokeNarrowMarkup = null;
 let labelStrokeNarrow = null;
+let bgFillMarkup = null;
 let bgFill = null;
 let legSel = -1;
 let geoMag = null;
@@ -5822,10 +5826,14 @@ function setLineWidth() {
         }),
     });
 
+    labelFillMarkup = new ol.style.Fill({color: 'yellow' });
     labelFill = new ol.style.Fill({color: 'white' });
     blackFill = new ol.style.Fill({color: 'black' });
+    labelStrokeMarkup = new ol.style.Stroke({color: 'red', width: 4 * globalScale});
     labelStroke = new ol.style.Stroke({color: 'rgba(0,0,0,0.7', width: 4 * globalScale});
+    labelStrokeNarrowMarkup = new ol.style.Stroke({color: 'red', width: 2.5 * globalScale});
     labelStrokeNarrow = new ol.style.Stroke({color: 'rgba(0,0,0,0.7', width: 2.5 * globalScale});
+    bgFillMarkup = new ol.style.Stroke({color: 'blue'});
     bgFill = new ol.style.Stroke({color: 'rgba(0,0,0,0.25'});
 }
 let lastCallLocationChange = 0;
