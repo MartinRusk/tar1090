@@ -234,7 +234,7 @@ function arraybufferRequest() {
     return xhrOverride;
 }
 
-if (usp.has('heatmap')) {
+if (usp.has('heatmap') || usp.has('realHeat')) {
 
     heatmap = {};
 
@@ -773,4 +773,20 @@ Filter.prototype.init = function() {
     ));
     jQuery('#' + this.id).on('submit', this.update);
     jQuery('#' + this.id).on('reset', this.reset);
+}
+
+let custom_layers = new ol.Collection();
+function add_kml_overlay(url, name, opacity) {
+    custom_layers.push(new ol.layer.Vector({
+        source: new ol.source.Vector({
+            url: url,
+            format: new ol.format.KML(),
+        }),
+        name: name,
+        title: 'custom_' + name,
+        type: 'overlay',
+        opacity: opacity,
+        visible: true,
+        zIndex: 99,
+    }));
 }
