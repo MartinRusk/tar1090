@@ -11,6 +11,7 @@ let webglFeatures = new ol.source.Vector();
 let webglLayer;
 let OLMap = null;
 let OLProj = null;
+let OLProjExtent = null;
 let PlaneIconFeatures = new ol.source.Vector();
 let trailGroup = new ol.Collection();
 let siteCircleLayer;
@@ -125,7 +126,9 @@ let overrideMapType = null;
 let layerMoreContrast = false;
 let layerExtraDim = 0;
 let layerExtraContrast = 0;
+let shareFiltersParam = false;
 
+let limitUpdates = false;
 
 let infoBlockWidth = baseInfoBlockWidth;
 
@@ -257,7 +260,7 @@ function processReceiverUpdate(data, init) {
         uat_last = uat_now;
         uat_now = data.now;
     } else {
-        if (data.now <= now && !globeIndex && !uuid) {
+        if (data.now <= now && !globeIndex) {
             if (data.now < now) {
                 console.log('timestep backwards, ignoring data:' + now + ' -> ' + data.now);
                 if (backwardsCounter++ > 5) {
@@ -294,6 +297,7 @@ function processReceiverUpdate(data, init) {
 
 let debugFetch = false;
 let C429 = 0;
+let fetchCalls = 0;
 function fetchData(options) {
     options = options || {};
     if (heatmap || replay || showTrace || pTracks || !loadFinished)
@@ -315,6 +319,11 @@ function fetchData(options) {
 
     //console.timeEnd("Starting Fetch");
     //console.time("Starting Fetch");
+
+    if (limitUpdates != false && fetchCalls > limitUpdates) {
+        return;
+    }
+    fetchCalls++;
 
     if (enable_uat) {
         FetchPendingUAT = jQuery.ajax({ url: 'chunks/978.json',
@@ -522,6 +531,8 @@ function initialize() {
         initPage();
         initMap();
 
+        processQueryToggles();
+
         // Wait for history item downloads and append them to the buffer
         push_history();
 
@@ -529,6 +540,33 @@ function initialize() {
             startPage();
         });
     });
+}
+
+function processQueryToggles() {
+    if (!usp.has('toggles')) {
+        return;
+    }
+    let todo;
+    try {
+        todo = usp.get('toggles').split(',');;
+    } catch (e) {
+        console.error(e);
+        return;
+    }
+    while (todo.length >= 2) {
+        let key = todo.shift();
+        let value = todo.shift();
+        let state = true;
+        if (value == 'false' || value == '0') {
+            state = false;
+        }
+        try {
+            toggles[key].toggle(state, "init");
+            console.log((state ? "Enabled" : "Disabled") + " setting: " + key);
+        } catch (e) {
+            console.error(e);
+        }
+    }
 }
 
 function replaySpeedChange(arg) {
@@ -559,6 +597,12 @@ function initPage() {
         MapType_tar1090 = 'carto_light_all';
         lineWidth=4;
         enableLabels=true;
+    }
+
+    if (usp.has('limitUpdates')) {
+        let tmp = parseInt(usp.get('limitUpdates'));
+        if (!isNaN(tmp))
+            limitUpdates = tmp;
     }
 
     if (usp.has('nowebgl')) {
@@ -782,22 +826,28 @@ function initPage() {
 
     if (usp.has('filterCallSign')) {
         PlaneFilter.callsign = usp.get('filterCallSign');
+        shareFiltersParam = true;
     }
     if (usp.has('filterType')) {
         PlaneFilter.type = usp.get('filterType');
+        shareFiltersParam = true;
     }
     if (usp.has('filterDescription')) {
         PlaneFilter.description = usp.get('filterDescription');
+        shareFiltersParam = true;
     }
     if (usp.has('filterIcao')) {
         PlaneFilter.icao = usp.get('filterIcao');
+        shareFiltersParam = true;
     }
 
     if (usp.has('filterSources')) {
         PlaneFilter.sources = usp.get('filterSources').split(',');
+        shareFiltersParam = true;
     }
     if (usp.has('filterDbFlag')) {
         PlaneFilter.flagFilter = usp.get('filterDbFlag').split(',');
+        shareFiltersParam = true;
     }
 
 
@@ -1286,7 +1336,7 @@ function initPage() {
     });
 
     new Toggle({
-        key: "selectedDetails",
+        key: "enableInfoblock",
         display: "Enable Infoblock",
         container: "#settingsRight",
         init: true,
@@ -1764,9 +1814,11 @@ function webglAddLayer() {
     let success = false;
 
     const icao = '~c0ffee';
-    if (icaoFilter) {
+
+    if (icaoFilter != null) {
         icaoFilter.push(icao);
     }
+
     processAircraft({hex: icao, lat: CenterLat, lon: CenterLon, type: 'tisb_other', seen: 0, seen_pos: 0,
         alt_baro: 25000, });
     let plane = Planes['~c0ffee'];
@@ -1775,7 +1827,7 @@ function webglAddLayer() {
         let glStyle = {
             symbol: {
                 symbolType: 'image',
-                src: 'images/sprites012.png',
+                src: 'images/sprites015.png',
                 size: [ 'get', 'size' ],
                 offset: [0, 0],
                 textureCoord: [ 'array',
@@ -1849,6 +1901,10 @@ function webglAddLayer() {
     delete Planes[plane.icao];
     PlanesOrdered.splice(PlanesOrdered.indexOf(plane), 1);
     plane.destroy();
+
+    if (icaoFilter != null) {
+        icaoFilter.pop(icao);
+    }
 
     return success;
 }
@@ -1983,6 +2039,7 @@ function initMap() {
             zIndex: 101,
             renderBuffer: renderBuffer,
             style: actualOutlineStyle,
+            visible: actual_range_show,
         });
         layers.push(actualOutlineLayer);
     }
@@ -2109,6 +2166,7 @@ function initMap() {
     }
 
     OLProj = OLMap.getView().getProjection();
+    OLProjExtent = OLProj.getExtent();
 
     OLMap.getView().setRotation(mapOrientation); // adjust orientation
 
@@ -2191,7 +2249,6 @@ function initMap() {
                 toggleIsolation();
             deselect(SelectedPlane);
             refreshFilter();
-            updateAddressBar();
         }
         evt.stopPropagation();
     });
@@ -2205,7 +2262,6 @@ function initMap() {
 
         deselect(SelectedPlane);
         refreshFilter();
-        updateAddressBar();
     });
 
 
@@ -2794,9 +2850,9 @@ function refreshSelected() {
     }
     let dbFlags = "";
     if (selected.ladd)
-        dbFlags += ' <a class="link" target="_blank" href="https://ladd.faa.gov/" rel="noreferrer">LADD</a> / ';
+        dbFlags += ' <a class="link" target="_blank" href="https://www.faa.gov/pilots/ladd/" rel="noreferrer">LADD</a> / ';
     if (selected.pia)
-        dbFlags += '<a class="link" target="_blank" href="https://www.faa.gov/nextgen/equipadsb/privacy/" rel="noreferrer">PIA</a> / ';
+        dbFlags += '<a class="link" target="_blank" href="https://www.faa.gov/air_traffic/technology/equipadsb/privacy/" rel="noreferrer">PIA</a> / ';
     if (selected.military)
         dbFlags += 'military / ';
     if (dbFlags.length == 0) {
@@ -2935,15 +2991,6 @@ function refreshSelected() {
 
     setSelectedIcao();
 
-    if (globeIndex || shareBaseUrl) {
-        const shareElement = jQuery('a.identSmall');
-        if (shareElement.prop('href') !== shareLink) {
-            shareElement.prop('href',shareLink);
-
-            // Assign shareLinkInput the value we want to copy on click
-            shareLinkInput.setAttribute("value", window.location.origin + shareLink);
-        }
-    }
     jQuery('#selected_pf_info').updateText((selected.pfRoute ? selected.pfRoute : "") );
     //+" "+ (selected.pfFlightno ? selected.pfFlightno : "")
     jQuery('#airframes_post_icao').attr('value',selected.icao);
@@ -3750,6 +3797,7 @@ function deselect(plane) {
     }
 
     plane.updateTick('redraw');
+    updateAddressBar();
 }
 let scount = 0;
 function select(plane, options) {
@@ -3995,7 +4043,7 @@ function adjustInfoBlock() {
     jQuery('.ol-scale-line').css('left', (infoBlockWidth * globalScale + 8) + 'px');
     jQuery('#replayBar').css('left', (infoBlockWidth * globalScale + 8) + 'px');
 
-    if (SelectedPlane && toggles['selectedDetails'].state) {
+    if (SelectedPlane && toggles['enableInfoblock'].state) {
 
         if (!mapIsVisible)
             jQuery("#sidebar_container").css('margin-left', '140pt');
@@ -4830,22 +4878,26 @@ function changeCenter(init) {
     const rawCenter = OLMap.getView().getCenter();
     const center = ol.proj.toLonLat(rawCenter);
 
-    const centerChanged = (Math.abs(center[1] - CenterLat) < 0.000001 && Math.abs(center[0] - CenterLon) < 0.000001);
+    const centerChanged = (Math.abs(center[1] - CenterLat) > 0.000001 && Math.abs(center[0] - CenterLon) > 0.000001);
+
+    if (!init && !centerChanged) {
+        return;
+    }
 
     loStore['CenterLon'] = CenterLon = center[0];
     loStore['CenterLat'] = CenterLat = center[1];
 
-    if (!init && showTrace && centerChanged) {
+    if (!init) {
         updateAddressBar();
     }
 
-    if (rawCenter[0] < OLProj.extent_[0] || rawCenter[0] > OLProj.extent_[2]) {
+    if (rawCenter[0] < OLProjExtent[0] || rawCenter[0] > OLProjExtent[2]) {
         OLMap.getView().setCenter(ol.proj.fromLonLat(center));
         mapRefresh();
     }
-    if (center[1] < -85)
+    if (CenterLat < -85)
         OLMap.getView().setCenter(ol.proj.fromLonLat([center[0], -85]));
-    if (center[1] > 85)
+    if (CenterLat > 85)
         OLMap.getView().setCenter(ol.proj.fromLonLat([center[0], 85]));
 }
 
@@ -4867,7 +4919,9 @@ function checkMovement() {
         checkMoveCenter[1] != center[1]
     ) {
         checkMoveDone = 0;
-        checkFollow();
+        if (FollowSelected) {
+            checkFollow();
+        }
         active();
         lastMovement = ts;
     }
@@ -5448,23 +5502,10 @@ let updateAddressBarPushed = false;
 function updateAddressBar() {
     if (!window.history || !window.history.replaceState)
         return;
-    if (heatmap || pTracks || !CenterLat)
+    if (heatmap || pTracks || !CenterLat || uuid)
         return;
-    let time = new Date().getTime();
-    if (time < lastAddressBarUpdate + 200) {
-        clearTimeout(updateAddressBarTimeout);
-        updateAddressBarTimeout = setTimeout(updateAddressBar, 205);
-        return;
-    }
-    lastAddressBarUpdate = time;
 
-    let posString = 'lat=' + CenterLat.toFixed(3) + '&lon=' + CenterLon.toFixed(3) + '&zoom=' + ZoomLvl.toFixed(1);
     let string = '';
-    if (((showTrace) && SelectedPlane) || replay) {
-        posString = "&" + posString;
-    } else {
-        posString = ""
-    }
 
     if (SelPlanes.length > 0) {
         string += '?icao=' + SelPlanes.map((s) => encodeURIComponent(s.icao)).join(',')
@@ -5475,10 +5516,14 @@ function updateAddressBar() {
         string += ':' + replay.ts.getUTCMinutes().toString().padStart(2,'0');
     }
 
-    string += posString;
+    if (showTrace || replay) {
+        string += (string ? '&' : '?');
+        string += 'lat=' + CenterLat.toFixed(3) + '&lon=' + CenterLon.toFixed(3) + '&zoom=' + ZoomLvl.toFixed(1);
+    }
 
-    if (SelectedPlane && (showTrace || replay)) {
-        string += '&showTrace=' + traceDateString;
+    if (SelPlanes.length > 0 && (showTrace || replay)) {
+        string += (string ? '&' : '?');
+        string += 'showTrace=' + traceDateString;
         if (legSel != -1)
             string += '&leg=' + (legSel + 1);
         if (traceOpts.startHours != null) {
@@ -5507,13 +5552,8 @@ function updateAddressBar() {
     }
 
     let shareFilter = '';
-    if (toggles.shareFilters  && toggles.shareFilters.state) {
+    if (shareFiltersParam || (toggles.shareFilters  && toggles.shareFilters.state)) {
         let filterStrings = [];
-        if (string === '') {
-            shareFilter = '?';
-        } else {
-            shareFilter = '&'
-        }
 
         if (PlaneFilter.minAltitude > -1000000) {
             filterStrings.push('filterAltMin=' + PlaneFilter.minAltitude);
@@ -5546,21 +5586,44 @@ function updateAddressBar() {
         } else {
             shareFilter = '';
         }
+
+        console.log(shareFilter);
+
+        if (shareFilter) {
+            string += (string ? '&' : '?');
+            string += shareFilter;
+        }
     }
 
-    string += shareFilter;
-    shareLink = (shareBaseUrl ? shareBaseUrl : pathName) + string;
+    if (icaoFilter && !showTrace) {
+        string += (string ? '&' : '?');
+        string += 'icaoFilter=' + icaoFilter.join(',')
+    }
 
-    if (uuid)
-        return;
-    if (icaoFilter)
-        return;
+    if (shareBaseUrl) {
+        shareLink = shareBaseUrl + string;
+    } else {
+        shareLink = window.location.origin + pathName + string;
+    }
+    //console.log(shareLink);
 
-    if (SelPlanes.length == 0 && initialURL && initialURL.indexOf("icao") < 0 && !replay && shareFilter == '') {
+    if (!string && !usp.has('showTrace') && !usp.has('icao')) {
         string = initialURL;
     } else {
         string = pathName + string;
     }
+
+    // Update URL bar
+    /*
+    let time = new Date().getTime();
+    if (time < lastAddressBarUpdate + 200) {
+        clearTimeout(updateAddressBarTimeout);
+        updateAddressBarTimeout = setTimeout(updateAddressBar, 205);
+        return;
+    }
+
+    lastAddressBarUpdate = time;
+    */
 
     if (!updateAddressBarPushed) {
         // make sure we keep the thing we clicked on first in the browser history
@@ -5576,7 +5639,7 @@ function refreshInt() {
     let refresh = RefreshInterval;
 
     if (uuid)
-        return 5000;
+        return 5050;
 
     // handle non globe case
     if (!globeIndex) {
@@ -6892,8 +6955,8 @@ function replayStep(arg) {
             let ac = {seen:0, seen_pos:0,};
             ac.hex = (points[i] & ((1<<24) - 1)).toString(16).padStart(6, '0');
             ac.hex = (points[i] & (1<<24)) ? ('~' + ac.hex) : ac.hex;
-            ac.flight = "";
             if (replay.pointsU8[4 * (i + 2)] != 0) {
+                ac.flight = "";
                 for (let j = 0; j < 8; j++) {
                     ac.flight += String.fromCharCode(replay.pointsU8[4 * (i + 2) + j]);
                 }
@@ -7055,7 +7118,7 @@ function updateMessageRate(data) {
         // .. and clean up any old values
         if ((now - MessageCountHistory[0].time) > 10)
             MessageCountHistory.shift();
-    } else if (uuid != null) {
+    } else if (uuid != null && data.messages == 1) {
         const cache = uuidCache[data.urlIndex] || { now: 0 };
         let time_delta = now - cache.now;
         if (time_delta > 0.5) {
@@ -7678,6 +7741,8 @@ let shareLinkInput = document.createElement("input");
 document.body.appendChild(shareLinkInput);
 
 function copyShareLink() {
+    // Assign shareLinkInput the value we want to copy
+    shareLinkInput.setAttribute("value", shareLink);
 
     // Highlight its content
     shareLinkInput.select();
@@ -7711,10 +7776,14 @@ function setSelectedIcao() {
         hex_html = hex_html + NBSP + NBSP + NBSP + icao_link;
     }
     jQuery('#selected_icao').html(hex_html);
+
+    jQuery('a.identSmall').prop('href',shareLink);
 }
 
 function mapTypeSettings() {
-    if (MapType_tar1090.startsWith('carto_raster')) {
+    if (MapType_tar1090.startsWith('maptiler_sat') || MapType_tar1090.startsWith('maptiler_hybrid')) {
+        layerExtraDim = -0.25;
+    } else if (MapType_tar1090.startsWith('carto_raster')) {
         layerExtraDim = -0.15;
         layerExtraContrast = 0.6;
     } else if (MapType_tar1090.startsWith('carto_light')) {
