@@ -100,7 +100,7 @@
             </div>
             <div class="rSpacer"></div>
             <div class="infoHeading">
-              <span><a style="color: blue" target="_blank" href="https://discussions.flightaware.com/t/flightaware-mlat-network-announcement/18874" rel="noreferrer">Anonymized MLAT result</a></span>
+              <span><a class="link" target="_blank" href="https://discussions.flightaware.com/t/flightaware-mlat-network-announcement/18874" rel="noreferrer">Anonymized MLAT result</a></span>
             </div>
             <div class="rSpacer"></div>
             <div class="rSpacer"></div>
@@ -110,7 +110,7 @@
             <div class="rSpacer"></div>
             <div>
               <div class="infoHeading">
-                <span>No <a style="color: blue" target="_blank" href="https://en.wikipedia.org/wiki/Aviation_transponder_interrogation_modes#ICAO_24-bit_address" rel="noreferrer">ICAO 24 bit address</a></span>
+                <span>No <a class="link" target="_blank" href="https://en.wikipedia.org/wiki/Aviation_transponder_interrogation_modes#ICAO_24-bit_address" rel="noreferrer">ICAO 24 bit address</a></span>
               </div>
             </div>
           </div>
@@ -120,7 +120,7 @@
             </div>
             <div class="infoHeading">
               <span title="TIS-B link">
-                <a style="color: blue" target="_blank" href="https://www.skybrary.aero/index.php/Traffic_Information_Service_-_Broadcast_(TIS-B)" rel="noreferrer">ATC contact broadcast</a></span>
+                <a class="link" target="_blank" href="https://www.skybrary.aero/index.php/Traffic_Information_Service_-_Broadcast_(TIS-B)" rel="noreferrer">ATC contact broadcast</a></span>
             </div>
             <div class="rSpacer">
             </div>
@@ -136,7 +136,7 @@
               <span>MLAT requires the contact to have a ModeS transponder and reception by 4 receivers</span>
             </div>
             <div class="infoHeading">
-              <span><a style="color: blue" target="_blank" href="https://en.wikipedia.org/wiki/Aviation_transponder_interrogation_modes#ICAO_24-bit_address" rel="noreferrer">What is a hex ID?</a></span>
+              <span><a class="link" target="_blank" href="https://en.wikipedia.org/wiki/Aviation_transponder_interrogation_modes#ICAO_24-bit_address" rel="noreferrer">What is a hex ID?</a></span>
             </div>
           </div>
           <div id=reg_info class="infoBlockSection">
@@ -294,7 +294,7 @@
               </tr>
               <tr>
                 <td>
-                  <span class="infoHeading" title="The geometric GPS derived altitude referenced to WGS84 ellipsoid (or reference EGM96 when enabled in the settings)">Geom. Altitude</span>:
+                  <span class="infoHeading" id="selected_altitude_geom1_title" title="The geometric GPS derived altitude referenced to WGS84 ellipsoid (or reference EGM96 when enabled in the settings)">WGS84 Altitude</span>:
                   <span class="infoData" id="selected_altitude_geom1"></span>
                 </td>
               </tr>
@@ -527,7 +527,7 @@
             </div>
             <div>
               <div class="infoHeading">
-                <span title="The geometric GPS derived altitude referenced to WGS84 ellipsoid (or reference EGM96 when enabled in the settings)">Geometric</span>:
+                <span id="selected_altitude_geom2_title" title="The geometric GPS derived altitude referenced to WGS84 ellipsoid (or reference EGM96 when enabled in the settings)">WGS84</span>:
               </div>
               <div class="infoData">
                 <span id="selected_altitude_geom2">n/a</span>
@@ -706,7 +706,14 @@
               </div>
           </div>
 
-          <button id="export_kml" onclick="exportKML()">Export KML (alpha)</button>
+          <div class="sectionTitle">
+            <div class="section-title-content">
+              Export KML
+            </div>
+          </div>
+          <button id="export_kml" onclick='exportKML("geom")'>geometric altitude (EGM96)</button>
+          <button id="export_kml" onclick='exportKML("geom_avg")'>baro + avg.(EGM96 - baro)</button>
+          <button id="export_kml" onclick='exportKML("baro")'>uncorrected pressure alt.</button>
 
         </div>
       </div> <!-- selected_infoblock -->
@@ -838,7 +845,7 @@
                   <div class="rSpacer"></div>
                   <div>
                     <span class="largeText">
-                      <a id="premium_text" class="largeText" target="_blank" href="https://store.adsbexchange.com/pages/subscription">Premium: no ads / Sat. Layer</a>
+                      <a id="premium_text" class="largeText" target="_blank" href="https://store.adsbexchange.com/pages/subscription">Get Premium: no ads / Sat. Layer</a>
                     </span>
                   </div>
                   <div class="rSpacer"></div>
@@ -1017,6 +1024,10 @@
       <span id="update_error_detail"></span>
     </div>
 
+    <div id="timers_paused" class="hidden error_box">
+      <span id="timers_paused_detail"></span>
+    </div>
+
     <div id="generic_error" class="hidden error_box">
       <span id="generic_error_detail"></span><br>
     </div>
@@ -1043,6 +1054,7 @@
     <script src="libs/elm-pep-01.js"></script>
     <script src="libs/jquery-ui-1.12.1.min.js"></script>
     <script src="libs/jquery.ui.touch-punch-1.12.1.js"></script>
+    <script src="libs/zstddec-0.0.2.js"></script>
     <script src="libs/ol-custom018.js"></script>
 
     <script src="early.js"></script>
@@ -1061,7 +1073,7 @@
     <script src="script.js"></script>
 
 
-    <link rel="preload" as="image" href="images/sprites015.png">
+    <link rel="preload" as="image" crossOrigin="anonymous" href="images/sprites016.png">
 
   </body>
 </html>

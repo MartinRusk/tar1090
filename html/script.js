@@ -127,8 +127,11 @@ let layerMoreContrast = false;
 let layerExtraDim = 0;
 let layerExtraContrast = 0;
 let shareFiltersParam = false;
+let lastRequestSize = 0;
+let lastRequestBox = '';
+let nextQuerySelected = 0;
 
-let limitUpdates = false;
+let limitUpdates = -1;
 
 let infoBlockWidth = baseInfoBlockWidth;
 
@@ -140,8 +143,8 @@ let onMobile = false;
 
 let CenterLat = 0;
 let CenterLon = 0;
-let ZoomLvl = 5;
-let ZoomLvlCache;
+let zoomLvl = 5;
+let zoomLvlCache;
 
 let TrackedAircraft = 0;
 let globeTrackedAircraft = 0;
@@ -300,12 +303,20 @@ let C429 = 0;
 let fetchCalls = 0;
 function fetchData(options) {
     options = options || {};
-    if (heatmap || replay || showTrace || pTracks || !loadFinished)
+    if (heatmap || replay || showTrace || pTracks || !loadFinished || inhibitFetch) {
         return;
+    }
     let currentTime = new Date().getTime();
 
-    if (!options.force && (currentTime - lastFetch < refreshInt() || pendingFetches > 0)) {
-        return;
+    if (!options.force) {
+        if (
+            currentTime - lastFetch < refreshInt()
+            || pendingFetches > 0
+            || OLMap.getView().getInteracting()
+            || OLMap.getView().getAnimating()
+        ) {
+            return;
+        }
     }
     if (debugFetch)
         console.log((currentTime - lastFetch)/1000);
@@ -320,7 +331,7 @@ function fetchData(options) {
     //console.timeEnd("Starting Fetch");
     //console.time("Starting Fetch");
 
-    if (limitUpdates != false && fetchCalls > limitUpdates) {
+    if (limitUpdates != -1 && fetchCalls > limitUpdates) {
         return;
     }
     fetchCalls++;
@@ -343,6 +354,45 @@ function fetchData(options) {
         for (let i in uuid) {
             ac_url.push('uuid/?feed=' + uuid[i]);
         }
+    } else if (reApi) {
+
+        if (now > nextQuerySelected > now && SelPlanes.length > 0) {
+            nextQuerySelected = now + 15; // directly query selected planes every 15 seconds
+            let url = 're-api/?' + (binCraft ? 'binCraft' : 'json');
+            url += zstd ? '&zstd' : '';
+            url += '&find_hex='
+            for (let k in SelPlanes) {
+                url += SelPlanes[k].icao + ','
+            }
+            url.slice(0, -1); // remove trailing comma
+            ac_url.push(url);
+        }
+
+        let url = 're-api/?' + (binCraft ? 'binCraft' : 'json');
+        url += zstd ? '&zstd' : '';
+        url += onlyMilitary ? '&filter_mil' : '';
+        lastRequestBox = requestBoxString();
+        if (icaoFilter) {
+            if (icaoFilter.length > 0) {
+                url += '&find_hex='
+                for (let k in icaoFilter) {
+                    url += icaoFilter[k] + ','
+                }
+                url = url.slice(0, -1); // remove trailing comma
+            }
+        } else if (onlySelected && SelPlanes.length > 0) {
+            url += '&find_hex='
+            for (let k in SelPlanes) {
+                url += SelPlanes[k].icao + ','
+            }
+            url = url.slice(0, -1); // remove trailing comma
+        } else  {
+            url += '&box=' + lastRequestBox;
+        }
+
+        ac_url.push(url);
+        //console.log(url);
+
     } else if (globeIndex) {
         let indexes = globeIndexes();
         const ancient = (currentTime - 2 * refreshInt() / globeSimLoad * globeTilesViewCount) / 1000;
@@ -363,18 +413,24 @@ function fetchData(options) {
             return (globeIndexNow[x] - globeIndexNow[y]);
         });
 
-        if (binCraft && onlyMilitary && ZoomLvl < 5.5) {
-            ac_url.push('data/globeMil_42777.binCraft');
+        if (binCraft && onlyMilitary && zoomLvl < 5.5) {
+            if (zstd) {
+                ac_url.push('data/globeMil_42777.binCraft.zst');
+            } else {
+                ac_url.push('data/globeMil_42777.binCraft');
+            }
         } else {
 
             indexes = indexes.slice(0, globeSimLoad);
 
-            let suffix = binCraft ? '.binCraft' : '.json'
+            let suffix = zstd ? '.binCraft.zst' : (binCraft ? '.binCraft' : '.json');
             let mid = (binCraft && onlyMilitary) ? 'Mil_' : '_';
             for (let i in indexes) {
                 ac_url.push('data/globe' + mid + indexes[i].toString().padStart(4, '0') + suffix);
             }
         }
+    } else if (zstd) {
+        ac_url.push('data/aircraft.binCraft.zst');
     } else if (binCraft) {
         ac_url.push('data/aircraft.binCraft');
     } else {
@@ -387,7 +443,7 @@ function fetchData(options) {
     for (let i in ac_url) {
         //console.log(ac_url[i]);
         let req;
-        if (binCraft) {
+        if (binCraft || zstd) {
             req = jQuery.ajax({
                 url: `${ac_url[i]}`, method: 'GET',
                 xhr: arraybufferRequest,
@@ -405,7 +461,22 @@ function fetchData(options) {
                 if (data == null) {
                     return;
                 }
-                if (binCraft) {
+                if (zstd) {
+                    let arr = new Uint8Array(data);
+                    lastRequestSize = arr.byteLength;
+                    let res;
+                    try {
+                        res = zstdDecode( arr, 0 );
+                    } catch (e) {
+                        webAssemblyFail(e);
+                        return;
+                    }
+                    let arrayBuffer = res.buffer
+                    // return type is Uint8Array, wqi requires the ArrayBuffer
+                    data = { buffer: arrayBuffer, };
+                    wqi(data);
+                } else if (binCraft) {
+                    lastRequestSize = data.byteLength / 2;
                     data = { buffer: data, };
                     wqi(data);
                 }
@@ -537,7 +608,18 @@ function initialize() {
         push_history();
 
         jQuery.when(historyLoaded).done(function() {
-            startPage();
+            if (!zstdDecode) {
+                startPage();
+            } else {
+                try {
+                    zstddec.promise.then(function() {
+                        startPage();
+                    });
+                } catch (e) {
+                    webAssemblyFail(e);
+                    startPage();
+                }
+            }
         });
     });
 }
@@ -652,16 +734,24 @@ function initPage() {
     }
 
     if (usp.has('SiteLat') && usp.has('SiteLon')) {
-        loStore['SiteLat'] = usp.get('SiteLat');
-        loStore['SiteLon'] = usp.get('SiteLon');
+        let lat = parseFloat(usp.get('SiteLat'));
+        let lon = parseFloat(usp.get('SiteLon'));
+        if (!isNaN(lat) && !isNaN(lon)) {
+            if (usp.has('SiteNosave')) {
+                SiteLat = CenterLat = DefaultCenterLat = lat;
+                SiteLon = CenterLon = DefaultCenterLon = lon;
+                SiteOverride = true;
+            } else {
+                loStore['SiteLat'] = lat;
+                loStore['SiteLon'] = lon;
+            }
+        }
     }
     if (loStore['SiteLat'] != null && loStore['SiteLon'] != null) {
-        if (usp.has('SiteClear')
-            || isNaN(parseFloat(loStore['SiteLat']))
-            || isNaN(parseFloat(loStore['SiteLat']))) {
+        if (usp.has('SiteClear')) {
             loStore.removeItem('SiteLat');
             loStore.removeItem('SiteLon');
-        } else {
+        } else if (!usp.has('SiteNosave')) {
             SiteLat = CenterLat = DefaultCenterLat = parseFloat(loStore['SiteLat']);
             SiteLon = CenterLon = DefaultCenterLon = parseFloat(loStore['SiteLon']);
             SiteOverride = true;
@@ -1063,6 +1153,9 @@ function initPage() {
         setState: function(state) {
             geomUseEGM = state;
             if (geomUseEGM) {
+jQuery('#selected_altitude_geom1')
+                jQuery('#selected_altitude_geom1_title').updateText('EGM96 altitude');
+                jQuery('#selected_altitude_geom2_title').updateText('Geometric EGM96');
                 let egm = loadEGM();
                 if (egm) {
                     egm.addEventListener('load', function() {
@@ -1071,6 +1164,9 @@ function initPage() {
                     });
                     return;
                 }
+            } else {
+                jQuery('#selected_altitude_geom1_title').updateText('WGS84 altitude');
+                jQuery('#selected_altitude_geom2_title').updateText('Geometric WGS84');
             }
             if (loadFinished) {
                 remakeTrails();
@@ -1650,8 +1746,8 @@ function parseHistory() {
 let timers = {};
 function clearIntervalTimers() {
     if (loadFinished) {
-        jQuery("#update_error_detail").text('Timers paused (tab hidden).');
-        jQuery("#update_error").css('display','block');
+        jQuery("#timers_paused_detail").text('Timers paused (tab hidden).');
+        jQuery("#timers_paused").css('display','block');
     }
     console.log("clear timers");
     const entries = Object.entries(timers);
@@ -1662,7 +1758,7 @@ function clearIntervalTimers() {
 
 function setIntervalTimers() {
     if (loadFinished) {
-        jQuery("#update_error").css('display','none');
+        jQuery("#timers_paused").css('display','none');
     }
     console.log("set timers");
     if ((adsbexchange || dynGlobeRate) && !uuid) {
@@ -1673,7 +1769,7 @@ function setIntervalTimers() {
 
     timers.checkMove = setInterval(checkMovement, 50);
     timers.everySecond = setInterval(everySecond, 850);
-    timers.reaper = setInterval(reaper, 20000);
+    timers.reaper = setInterval(reaper, 40000);
     //reaper();
     if (tempTrails) {
         timers.trailReaper = window.setInterval(trailReaper, 10000);
@@ -1685,22 +1781,49 @@ function setIntervalTimers() {
         fetchPfData();
     }
     if (receiverJson && receiverJson.outlineJson) {
-        timers.drawOutline = window.setInterval(drawOutlineJson, 30000);
+        timers.drawOutline = window.setInterval(drawOutlineJson, 15000);
         drawOutlineJson();
     }
 }
 
+let djson;
+let dstring;
+let dresult;
 
 function startPage() {
+
+
+    if (0) {
+            console.log('bla');
+        jQuery.ajax({
+            url: 'data/aircraft.json.zst' , method: 'GET',
+            xhr: arraybufferRequest,
+            timeout: 15000,
+        }).done(function(data) {
+            console.log('asdf');
+            let arr = new Uint8Array(data);
+            let uncompressedSize = 83843;
+            console.time("zstd");
+            dresult = zstdDecode( arr, 0 );
+            console.timeEnd("zstd");
+            console.time("stringify");
+            dstring = String.fromCharCode.apply(null, dresult);
+            console.timeEnd("stringify");
+            console.time("JSON.parse");
+            djson = JSON.parse(dstring);
+            console.timeEnd("JSON.parse");
+        });
+    }
+
     console.log("Completing init");
 
     if (!globeIndex) {
         jQuery("#lastLeg_cb").parent().hide();
         jQuery('#show_trace').hide();
     }
-    if (globeIndex) {
+    if (globeIndex && !icaoFilter) {
         jQuery('#V').hide();
-    } else {
+        toggleTableInView(true);
     }
 
     if (hideButtons) {
@@ -1713,8 +1836,6 @@ function startPage() {
         jQuery('.ol-attribution').show();
     }
 
-    if (!icaoFilter && globeIndex)
-        toggleTableInView(true);
 
     changeZoom("init");
     changeCenter("init");
@@ -1827,7 +1948,7 @@ function webglAddLayer() {
         let glStyle = {
             symbol: {
                 symbolType: 'image',
-                src: 'images/sprites015.png',
+                src: 'images/sprites016.png',
                 size: [ 'get', 'size' ],
                 offset: [0, 0],
                 textureCoord: [ 'array',
@@ -1966,8 +2087,8 @@ function initMap() {
     // Load stored map settings if present
     CenterLon = Number(loStore['CenterLon']) || DefaultCenterLon;
     CenterLat = Number(loStore['CenterLat']) || DefaultCenterLat;
-    ZoomLvl = Number(loStore['ZoomLvl']) || DefaultZoomLvl;
-    ZoomLvlCache = ZoomLvl;
+    zoomLvl = Number(loStore['zoomLvl']) || DefaultZoomLvl;
+    zoomLvlCache = zoomLvl;
 
     if (overrideMapType)
         MapType_tar1090 = overrideMapType;
@@ -2092,7 +2213,7 @@ function initMap() {
         layers: layers,
         view: new ol.View({
             center: ol.proj.fromLonLat([CenterLon, CenterLat]),
-            zoom: ZoomLvl,
+            zoom: zoomLvl,
             multiWorld: true,
         }),
         controls: [new ol.control.Zoom({delta: 1, duration: 0, target: 'map_canvas',}),
@@ -2266,7 +2387,7 @@ function initMap() {
 
 
     // show the hover box
-    if (!globeIndex && ZoomLvl > 5.5 && enableMouseover) {
+    if (!globeIndex && zoomLvl > 5.5 && enableMouseover) {
         OLMap.on('pointermove', onPointermove);
     }
 
@@ -2402,11 +2523,16 @@ function initMap() {
                 break;
                 // zoom and movement
             case "q":
+            case "-":
+            case "Subtract":
                 zoomOut();
                 break;
             case "e":
+            case "+":
+            case "Add":
                 zoomIn();
                 break;
+            case "ArrowUp":
             case "w":
                 oldCenter = OLMap.getView().getCenter();
                 extent = OLMap.getView().calculateExtent(OLMap.getSize());
@@ -2414,6 +2540,7 @@ function initMap() {
                 OLMap.getView().setCenter(newCenter);
                 toggleFollow(false);
                 break;
+            case "ArrowDown":
             case "s":
                 oldCenter = OLMap.getView().getCenter();
                 extent = OLMap.getView().calculateExtent(OLMap.getSize());
@@ -2421,6 +2548,7 @@ function initMap() {
                 OLMap.getView().setCenter(newCenter);
                 toggleFollow(false);
                 break;
+            case "ArrowLeft":
             case "a":
                 oldCenter = OLMap.getView().getCenter();
                 extent = OLMap.getView().calculateExtent(OLMap.getSize());
@@ -2428,6 +2556,7 @@ function initMap() {
                 OLMap.getView().setCenter(newCenter);
                 toggleFollow(false);
                 break;
+            case "ArrowRight":
             case "d":
                 oldCenter = OLMap.getView().getCenter();
                 extent = OLMap.getView().calculateExtent(OLMap.getSize());
@@ -3980,10 +4109,10 @@ function resetMap() {
     // Reset loStore values and map settings
     loStore['CenterLat'] = CenterLat
     loStore['CenterLon'] = CenterLon
-    //loStore['ZoomLvl']   = ZoomLvl = DefaultZoomLvl;
+    //loStore['zoomLvl']   = zoomLvl = DefaultZoomLvl;
 
     // Set and refresh
-    //OLMap.getView().setZoom(ZoomLvl);
+    //OLMap.getView().setZoom(zoomLvl);
     OLMap.getView().setCenter(ol.proj.fromLonLat([CenterLon, CenterLat]));
     OLMap.getView().setRotation(mapOrientation);
 
@@ -4163,7 +4292,7 @@ function refreshFilter() {
 
     drawHeatmap();
     if (toggles.shareFilters && toggles.shareFilters.state) {
-        updateAddressBar()
+        updateAddressBar();
     }
 }
 
@@ -4470,7 +4599,7 @@ function onJump(e) {
         console.log("jumping to: " + coords[0] + " " + coords[1]);
         OLMap.getView().setCenter(ol.proj.fromLonLat([coords[1], coords[0]]));
 
-        if (ZoomLvl >= 7) {
+        if (zoomLvl >= 7) {
             fetchData({force: true});
         }
 
@@ -4820,16 +4949,16 @@ function changeZoom(init) {
     if (!OLMap)
         return;
 
-    ZoomLvl = OLMap.getView().getZoom();
+    zoomLvl = OLMap.getView().getZoom();
 
     checkScale();
 
     // small zoomstep, no need to change aircraft scaling
-    if (!init && Math.abs(ZoomLvl-ZoomLvlCache) < 0.4)
+    if (!init && Math.abs(zoomLvl-zoomLvlCache) < 0.4)
         return;
 
-    loStore['ZoomLvl'] = ZoomLvl;
-    ZoomLvlCache = ZoomLvl;
+    loStore['zoomLvl'] = zoomLvl;
+    zoomLvlCache = zoomLvl;
 
     if (!init && showTrace)
         updateAddressBar();
@@ -4838,7 +4967,7 @@ function changeZoom(init) {
 }
 
 function checkScale() {
-    if (ZoomLvl > markerZoomDivide)
+    if (zoomLvl > markerZoomDivide)
         iconSize = markerBig;
     else
         iconSize = markerSmall;
@@ -4865,7 +4994,7 @@ function setGlobalScale(scale, init) {
 }
 
 function checkPointermove() {
-    if ((webgl || ZoomLvl > 5.5) && enableMouseover && !onMobile) {
+    if ((webgl || zoomLvl > 5.5) && enableMouseover && !onMobile) {
         OLMap.on('pointermove', onPointermove);
     } else {
         OLMap.un('pointermove', onPointermove);
@@ -4878,7 +5007,7 @@ function changeCenter(init) {
     const rawCenter = OLMap.getView().getCenter();
     const center = ol.proj.toLonLat(rawCenter);
 
-    const centerChanged = (Math.abs(center[1] - CenterLat) > 0.000001 && Math.abs(center[0] - CenterLon) > 0.000001);
+    const centerChanged = (Math.abs(center[1] - CenterLat) > 0.000001 || Math.abs(center[0] - CenterLon) > 0.000001);
 
     if (!init && !centerChanged) {
         return;
@@ -5012,7 +5141,7 @@ function mapRefresh(redraw) {
             // disable mobile limitations when using webGL
             if (
                 (!onMobile || webgl || nMapPlanes < 150)
-                && (!onMobile || webgl || ZoomLvl > 10 || !plane.onGround)
+                && (!onMobile || webgl || zoomLvl > 10 || !plane.onGround)
                 && plane.visible
                 && plane.inView
             ) {
@@ -5357,12 +5486,17 @@ function setIndexDistance(index, center, coords) {
     globeIndexDist[index] = min;
 }
 
+function getViewOversize(factor) {
+    factor || (factor = 1);
+    let mapSize = OLMap.getSize();
+    let size = [mapSize[0] * factor, mapSize[1] * factor];
+    return myExtent(OLMap.getView().calculateExtent(size));
+}
+
 function globeIndexes() {
     const center = ol.proj.toLonLat(OLMap.getView().getCenter());
     if (mapIsVisible || lastGlobeExtent == null) {
-        let mapSize = OLMap.getSize();
-        let size = [mapSize[0] * 1.02, mapSize[1] * 1.02];
-        lastGlobeExtent = myExtent(OLMap.getView().calculateExtent(size));
+        lastGlobeExtent = getViewOversize(1.02);
     }
     let extent = lastGlobeExtent.extent;
     const bottomLeft = ol.proj.toLonLat([extent[0], extent[1]]);
@@ -5518,7 +5652,7 @@ function updateAddressBar() {
 
     if (showTrace || replay) {
         string += (string ? '&' : '?');
-        string += 'lat=' + CenterLat.toFixed(3) + '&lon=' + CenterLon.toFixed(3) + '&zoom=' + ZoomLvl.toFixed(1);
+        string += 'lat=' + CenterLat.toFixed(3) + '&lon=' + CenterLon.toFixed(3) + '&zoom=' + zoomLvl.toFixed(1);
     }
 
     if (SelPlanes.length > 0 && (showTrace || replay)) {
@@ -5587,7 +5721,7 @@ function updateAddressBar() {
             shareFilter = '';
         }
 
-        console.log(shareFilter);
+        //console.log(shareFilter);
 
         if (shareFilter) {
             string += (string ? '&' : '?');
@@ -5648,8 +5782,31 @@ function refreshInt() {
 
     // handle globe case
 
-    if (binCraft && globeIndex && onlyMilitary && OLMap.getView().getZoom() < 5.5) {
-        refresh = 8000;
+    if (reApi && (binCraft || zstd)) {
+        refresh = RefreshInterval * lastRequestSize / 35000;
+        let extent = getViewOversize(1.03);
+        let min = 0.7;
+        let max = 7;
+        if (zoomLvl < 5) {
+            min += Math.min(1, (5 - zoomLvl) / 4);
+        }
+        if (refresh < RefreshInterval * min) {
+            refresh = RefreshInterval * min;
+        }
+        if (refresh > RefreshInterval * max) {
+            refresh = RefreshInterval * max;
+        }
+        if (onlySelected && SelPlanes.length == 0 && reApi) {
+            // no aircraft selected, none shown
+            refresh = RefreshInterval * max * 2;
+        }
+        if (!FollowSelected && lastRequestBox != requestBoxString()) {
+            refresh = Math.min(RefreshInterval, refresh / 4);
+        }
+    }
+
+    if (!reApi && binCraft && globeIndex && onlyMilitary && OLMap.getView().getZoom() < 5.5) {
+        refresh = 5000;
     }
 
     let inactive = getInactive();
@@ -5659,7 +5816,9 @@ function refreshInt() {
     if (inactive > 240)
         inactive = 240;
 
-    refresh *= inactive / 70;
+    if (globeIndex) {
+        refresh *= inactive / 70;
+    }
 
     if (!mapIsVisible)
         refresh *= 2;
@@ -5670,6 +5829,7 @@ function refreshInt() {
         refresh *= 1.5;
     }
 
+    //console.log(refresh);
 
     return refresh;
 }
@@ -5700,7 +5860,7 @@ function toggleShowTrace() {
             const plane = SelPlanes[i];
             plane.setNull();
         }
-        selectPlaneByHex(hex, {noDeselect: true, follow: true, zoom: ZoomLvl,});
+        selectPlaneByHex(hex, {noDeselect: true, follow: true, zoom: zoomLvl,});
     }
 
     jQuery('#history_collapse').toggle();
@@ -5837,7 +5997,7 @@ function shiftTrace(offset) {
     jQuery("#histDatePicker").datepicker('setDate', traceDateString);
 
     for (let i in SelPlanes) {
-        selectPlaneByHex(SelPlanes[i].icao, {noDeselect: true, zoom: ZoomLvl});
+        selectPlaneByHex(SelPlanes[i].icao, {noDeselect: true, zoom: zoomLvl});
     }
 
     updateAddressBar();
@@ -6321,13 +6481,7 @@ function getTrace(newPlane, hex, options) {
 
     // use non historic traces until 60 min after midnight
     let today = new Date();
-    if (
-        (showTrace || replay) &&
-        (
-            !(today.getTime() > traceDate.getTime() && today.getTime() < traceDate.getTime() + (24 * 3600 + 60 * 60) * 1000)
-            || trace_hist_only
-        )
-    ) {
+    if ((showTrace || replay) && !(today.getTime() > traceDate.getTime() && today.getTime() < traceDate.getTime() + (24 * 3600 + 60 * 60) * 1000)) {
         let dateString = traceDateString || zDateString(today);
         URL1 = null;
         URL2 = 'globe_history/' + dateString.replace(/-/g, '/') + '/traces/' + hex.slice(-2) + '/trace_full_' + hex + '.json';
@@ -6336,6 +6490,10 @@ function getTrace(newPlane, hex, options) {
         URL1 = 'data/traces/'+ hex.slice(-2) + '/trace_recent_' + hex + '.json';
         URL2 = 'data/traces/'+ hex.slice(-2) + '/trace_full_' + hex + '.json';
         traceRate += 2;
+    }
+    if (showTrace && trace_hist_only) {
+        let dateString = traceDateString || zDateString(today);
+        URL2 = 'globe_history/' + dateString.replace(/-/g, '/') + '/traces/' + hex.slice(-2) + '/trace_full_' + hex + '.json';
     }
 
     traceOpts.follow = (options.follow == true);
@@ -7428,40 +7586,44 @@ function coordsForExport(plane) {
     let runningAverage = 0;
     let lastTimestamp = 0;
     let delta;
-    const avgWindow = 8;
-    for (let i = 0; i < numSegs; i++) {
-        const seg = segs[i];
-        const geom = seg.alt_geom;
-        const baro = seg.alt_real;
-        let geomOffset = null;
-        if (!seg.ground && baro != null && geom != null) {
-            seg.geomOffset = geom - baro;
-            delta = (seg.geomOffset - runningAverage);
-            if (delta <= 50) {
-                runningAverage += delta * Math.min(1, (seg.ts - lastTimestamp) / avgWindow);
-            } else {
-                runningAverage = seg.geomOffset;
+    //console.log(kmlStyle);
+    if (kmlStyle == 'geom_avg') {
+        //console.log('averaging');
+        const avgWindow = 8;
+        for (let i = 0; i < numSegs; i++) {
+            const seg = segs[i];
+            const geom = seg.alt_geom;
+            const baro = seg.alt_real;
+            let geomOffset = null;
+            if (!seg.ground && baro != null && geom != null) {
+                seg.geomOffset = geom - baro;
+                delta = (seg.geomOffset - runningAverage);
+                if (delta <= 50) {
+                    runningAverage += delta * Math.min(1, (seg.ts - lastTimestamp) / avgWindow);
+                } else {
+                    runningAverage = seg.geomOffset;
+                }
+                seg.geomOffAverage = runningAverage;
+                lastTimestamp = seg.ts;
             }
-            seg.geomOffAverage = runningAverage;
-            lastTimestamp = seg.ts;
         }
-    }
-    lastTimestamp = 1e12;
-    for (let i = numSegs - 1; i >= 0; i--) {
-        const seg = segs[i];
-        const geom = seg.alt_geom;
-        const baro = seg.alt_real;
-        let geomOffset = null;
-        if (seg.geomOffset != null) {
-            delta = (seg.geomOffset - runningAverage);
-            if (delta <= 50) {
-                runningAverage += delta * Math.min(1, (lastTimestamp - seg.ts) / avgWindow);
-            } else {
-                runningAverage = seg.geomOffset;
+        lastTimestamp = 1e12;
+        for (let i = numSegs - 1; i >= 0; i--) {
+            const seg = segs[i];
+            const geom = seg.alt_geom;
+            const baro = seg.alt_real;
+            let geomOffset = null;
+            if (seg.geomOffset != null) {
+                delta = (seg.geomOffset - runningAverage);
+                if (delta <= 50) {
+                    runningAverage += delta * Math.min(1, (lastTimestamp - seg.ts) / avgWindow);
+                } else {
+                    runningAverage = seg.geomOffset;
+                }
+                //console.log(seg.geomOffAverage + ' ' + runningAverage);
+                seg.geomOffAverage = (seg.geomOffAverage + runningAverage) / 2;
+                lastTimestamp = seg.ts;
             }
-            //console.log(seg.geomOffAverage + ' ' + runningAverage);
-            seg.geomOffAverage = (seg.geomOffAverage + runningAverage) / 2;
-            lastTimestamp = seg.ts;
         }
     }
     for (let i = 0; i < numSegs; i++) {
@@ -7472,23 +7634,19 @@ function coordsForExport(plane) {
             const baro = seg.alt_real;
             const geom = seg.alt_geom;
             const geomOffAverage = seg.geomOffAverage;
-            if (geomOffAverage != null) {
+            let using_baro = false;
+            if (kmlStyle == 'geom_avg' && geomOffAverage != null) {
                 const betterGeom = baro + geomOffAverage;
-                //console.log(betterGeom);
                 alt = Math.round(betterGeom * 0.3048); // convert ft to m
-            } else if (geom != null) {
+            } else if (kmlStyle != 'baro' && geom != null) {
                 alt = Math.round(geom * 0.3048); // convert ft to m
-            } else if (baro != null) {
-                // Attempt to correct altitude. This could be better?
-                //
-                // 950 feet is the correction factor for an altimeter of 30.15.
-                // 25 feet is the quantum of transponder reporting. 0 altitude
-                // could be reported as -25, so just add 25.
-                alt = (baro + 950 + 25) * 0.3048;
+            } else if (kmlStyle == 'baro' && baro != null && baro != 'ground') {
+                alt = Math.round(baro * 0.3048);
+                using_baro = true;
             }
             if (seg.ground) {
                 alt = "ground";
-            } else if (alt != null && egmLoaded) {
+            } else if (alt != null && egmLoaded && !using_baro) {
                 // alt is in meters at this point
                 alt = Math.round(egm96.ellipsoidToEgm96(pos[1], pos[0], alt));
             }
@@ -7533,9 +7691,10 @@ function RGBColorToKMLColor(c) {
 // Returns an array of selected planes, ordered by registration-or-ICAO.
 function selectedPlanes() {
     const planes = [];
-    for (let key in Planes) {
-        if (Planes[key].selected) {
-            planes.push(Planes[key]);
+    for (let key in SelPlanes) {
+        let plane = SelPlanes[key];
+        if (plane.selected) {
+            planes.push(plane);
         }
     }
     planes.sort((a, b) => {
@@ -7574,9 +7733,13 @@ function adjust_geom_alt(alt, pos) {
         return alt;
     }
 }
-function exportKML() {
+let kmlStyle = '';
+function exportKML(altStyle) {
+    if (altStyle) {
+        kmlStyle = altStyle;
+    }
     if (!egmLoaded) {
-        let egm = loadEGM()
+        let egm = loadEGM();
         if (egm) {
             egm.addEventListener('load', function() {
                 exportKML();
@@ -7676,8 +7839,13 @@ function exportKML() {
         ]
     ];
     const xml = prologue + hiccup(xmlObj);
+    let styleName = '';
+    if (kmlStyle == 'geom') { styleName = 'EGM96'; };
+    if (kmlStyle == 'geom_avg') { styleName = 'EGM96_avg'; };
+    if (kmlStyle == 'baro') { styleName = 'press_alt_uncorrected'; };
+    //console.log(kmlStyle + ' ' + styleName);
     download(
-        filename + '-track.kml',
+        filename + '-track-' + styleName + '.kml',
         'application/vnd.google-earth.kml+xml',
         xml);
 }
@@ -7793,6 +7961,16 @@ function mapTypeSettings() {
         layerExtraDim = 0;
         layerExtraContrast = 0;
     }
+}
+
+function requestBoxString() {
+    let extent = getViewOversize(1.03);
+    let minLon = extent.minLon.toFixed(6);
+    let maxLon = extent.maxLon.toFixed(6);
+    if (Math.abs(extent.extent[2] - extent.extent[0]) > 40075016) { // all longtitudes in view
+        minLon = -180, maxLon = 180;
+    }
+    return `${extent.minLat.toFixed(6)},${extent.maxLat.toFixed(6)},${minLon},${maxLon}`;
 }
 
 if (adsbexchange && window.location.hostname.startsWith('inaccurate')) {

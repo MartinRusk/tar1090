@@ -331,6 +331,8 @@ PlaneObject.prototype.isFiltered = function() {
             return true;
         if (this.altitude == 'ground' && (this.addrtype == 'adsb_icao_nt' || this.addrtype == 'tisb_other'))
             return true;
+        if (this.squawk == 7777)
+            return true;
     }
 
     // filter out blocked MLAT flights
@@ -856,10 +858,10 @@ PlaneObject.prototype.updateIcon = function() {
 
     if ( enableLabels && (!multiSelect || (multiSelect && this.selected)) &&
         (
-            (ZoomLvl >= labelZoom && this.altitude != "ground")
-            || (ZoomLvl >= labelZoomGround - 2 && this.speed > 5 && !this.fakeHex)
-            || (ZoomLvl >= labelZoomGround + 0 && !this.fakeHex)
-            || (ZoomLvl >= labelZoomGround + 1)
+            (zoomLvl >= labelZoom && this.altitude != "ground")
+            || (zoomLvl >= labelZoomGround - 2 && this.speed > 5 && !this.fakeHex)
+            || (zoomLvl >= labelZoomGround + 0 && !this.fakeHex)
+            || (zoomLvl >= labelZoomGround + 1)
             || (this.selected && !SelectedAllPlanes)
         )
     ) {
@@ -1066,7 +1068,7 @@ PlaneObject.prototype.processTrace = function() {
 
     this.position = null;
 
-    if (this.fullTrace && this.recentTrace) {
+    if (this.fullTrace && this.recentTrace && this.fullTrace.length > 0 && this.recentTrace.length > 0) {
         let t1 = this.fullTrace.trace;
         let t2 = this.recentTrace.trace;
         let end1 = t1[t1.length-1][0];
@@ -1083,14 +1085,14 @@ PlaneObject.prototype.processTrace = function() {
             const recent = this.recentTrace.trace;
             for (let i = 0; i < recent.length; i++) {
                 const entry = recent[i];
-                if (entry[0] > trace[trace.length - 1][0]) {
+                if (trace.length == 0 || entry[0] > trace[trace.length - 1][0]) {
                     trace.push(entry);
                 }
             }
         }
     }
 
-    if (trace) {
+    if (trace && trace.length > 0) {
         let start = 0;
         let end = trace.length;
         _last = trace[0][0] - 1;
@@ -1132,7 +1134,7 @@ PlaneObject.prototype.processTrace = function() {
             const leg_marker = state[6] & 2;
 
             // no going backwards in time
-            if (timestamp <= _now)
+            if (timestamp < _now)
                 continue;
 
             _now = timestamp;
@@ -1432,18 +1434,19 @@ PlaneObject.prototype.updateData = function(now, last, data, init) {
 
     this.updateAlt();
 
-    if (gs != null)
-        this.gs = gs;
-    else if (data.speed != null)
-        this.gs = data.speed;
-    else if (!pTracks)
-        this.gs = null;
+    if (data.speed != null) {
+        gs = data.speed;
+    }
 
     // needed for track labels
     if (pTracks) {
-        this.speed = Math.max(this.speed, gs);
+        if (gs != null) {
+            this.speed = Math.max(this.speed, gs);
+        }
+        this.gs = gs;
     } else {
         this.speed = gs;
+        this.gs = gs;
     }
 
     this.track = track;
@@ -1532,9 +1535,6 @@ PlaneObject.prototype.updateData = function(now, last, data, init) {
 
     // simple fields
     this.alt_geom = data.alt_geom;
-    if (debugTracks && this.selected) {
-        console.log('updateData() updating alt_geom: ' + this.alt_geom);
-    }
     this.ias = data.ias;
     this.tas = data.tas;
     this.track_rate = data.track_rate;
