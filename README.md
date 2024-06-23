@@ -1,4 +1,4 @@
-# tar1090
+# tar1090 (BPFV Version)
 
 
 ![Screenshot1](https://raw.githubusercontent.com/MartinRusk/tar1090/screenshots/screenshot3.png)
@@ -11,6 +11,10 @@ Provides an improved webinterface for use with ADS-B decoders readsb / dump1090-
 - Map can be dimmed/darkened
 - Multiple aircraft can be selected
 - Labels with the callsign can be switched on and off
+
+## BPFV Version 
+
+- Patched ICAO code evaluation for BPFV planes with customized flag
 
 ## NO WARRANTY
 
