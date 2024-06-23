@@ -1,6 +1,18 @@
 // This was functionality of script.js, moved it to here to start the downloading of track history earlier
 "use strict";
 
+console.time("Page Load");
+
+// TAR1090 application object
+let TAR;
+TAR = (function (global, jQuery, TAR) {
+    return TAR;
+}(window, jQuery, TAR || {}));
+
+// global object to store big stuff ... avoid clojur stupidity keeping the reference to big objects
+let g = {};
+
+let loadFinished = false;
 let Dump1090Version = "unknown version";
 let RefreshInterval = 1000;
 let globeSimLoad = 6;
@@ -9,21 +21,23 @@ let enable_uat = false;
 let enable_pf_data = false;
 let HistoryChunks = false;
 let nHistoryItems = 0;
+let HistoryItemsLoaded;
 let HistoryItemsReturned = 0;
 let chunkNames = [];
-let PositionHistoryBuffer = [];
-var	receiverJson;
-let deferHistory = [];
+let PositionHistoryBuffer;
+var receiverJson;
+let deferHistory;
 let historyLoaded = jQuery.Deferred();
+let zstdDefer = jQuery.Deferred();
 let configureReceiver = jQuery.Deferred();
+let historyQueued = jQuery.Deferred();
 let historyTimeout = 60;
 let globeIndex = 0;
 let globeIndexGrid = 0;
 let globeIndexSpecialTiles;
-let dynGlobeRate = false;
 let binCraft = false;
 let reApi = false;
-let zstd = false;
+let zstd = true; // default to on
 let dbServer = false;
 let l3harris = false;
 let heatmap = false;
@@ -38,7 +52,6 @@ let pTracks = false;
 let pTracksInterval = 15;
 let lastTraceGet = 0;
 let traceRate = 0;
-let _aircraft_type_cache = null;
 let tfrs = false;
 let initialURL = window.location.href;
 let milRanges = [];
@@ -47,6 +60,9 @@ let calcOutlineData = null;
 
 let uuid = null;
 let uuidCache = [];
+
+let inhibitFetch = false;
+let zstdDecode = null;
 
 let usp;
 try {
@@ -130,9 +146,10 @@ var fakeLocalStorage = function() {
 };
 
 
-if (window.location.href.match(/adsbexchange.com/) && window.location.pathname == '/')
+if (window.location.href.match(/adsbexchange.com/) && window.location.pathname == '/') {
     adsbexchange = true;
-if (adsbexchange && window.self != window.top) {
+}
+if (0 && window.self != window.top) {
     fakeLocalStorage();
 } else {
     try {
@@ -255,6 +272,8 @@ if (usp.has('heatmap') || usp.has('realHeat')) {
         heatmap.end -= tmp * 3600 * 1000;
     if (usp.has('heatLines'))
         heatmap.lines = true;
+    if (usp.has('heatfilters'))
+        heatmap.filters = true;
     tmp = parseFloat(usp.get('heatAlpha'));
     if (!isNaN(tmp)) {
         heatmap.alpha = tmp;
@@ -337,25 +356,8 @@ function lDateString(date) {
     return string;
 }
 
-let get_receiver_defer;
-let test_chunk_defer;
-const hostname = window.location.hostname;
-if (uuid) {
-    // don't need receiver / chunks json
-} else if (adsbexchange && (hostname.startsWith('globe.') || hostname.startsWith('globe-'))) {
-    console.log("Using adsbexchange fast-path load!");
-    let data = JSON.parse('{"zstd":true,"reapi":true,"refresh":1600,"history":1,"dbServer":true,"binCraft":true,"globeIndexGrid":3,"globeIndexSpecialTiles":[{"south":60,"east":0,"north":90,"west":-126},{"south":60,"east":150,"north":90,"west":0},{"south":51,"east":-126,"north":90,"west":150},{"south":9,"east":-126,"north":51,"west":150},{"south":51,"east":-69,"north":60,"west":-126},{"south":45,"east":-114,"north":51,"west":-120},{"south":45,"east":-102,"north":51,"west":-114},{"south":45,"east":-90,"north":51,"west":-102},{"south":45,"east":-75,"north":51,"west":-90},{"south":45,"east":-69,"north":51,"west":-75},{"south":42,"east":18,"north":48,"west":12},{"south":42,"east":24,"north":48,"west":18},{"south":48,"east":24,"north":54,"west":18},{"south":54,"east":24,"north":60,"west":12},{"south":54,"east":12,"north":60,"west":3},{"south":54,"east":3,"north":60,"west":-9},{"south":42,"east":0,"north":48,"west":-9},{"south":42,"east":51,"north":51,"west":24},{"south":51,"east":51,"north":60,"west":24},{"south":30,"east":90,"north":60,"west":51},{"south":30,"east":120,"north":60,"west":90},{"south":30,"east":129,"north":39,"west":120},{"south":30,"east":138,"north":39,"west":129},{"south":30,"east":150,"north":39,"west":138},{"south":39,"east":150,"north":60,"west":120},{"south":9,"east":111,"north":21,"west":90},{"south":21,"east":111,"north":30,"west":90},{"south":9,"east":129,"north":24,"west":111},{"south":24,"east":120,"north":30,"west":111},{"south":24,"east":129,"north":30,"west":120},{"south":9,"east":150,"north":30,"west":129},{"south":9,"east":69,"north":30,"west":51},{"south":9,"east":90,"north":30,"west":69},{"south":-90,"east":51,"north":9,"west":-30},{"south":-90,"east":111,"north":9,"west":51},{"south":-90,"east":160,"north":-18,"west":111},{"south":-18,"east":160,"north":9,"west":111},{"south":-90,"east":-90,"north":-42,"west":160},{"south":-42,"east":-90,"north":9,"west":160},{"south":-9,"east":-42,"north":9,"west":-90},{"south":-90,"east":-63,"north":-9,"west":-90},{"south":-21,"east":-42,"north":-9,"west":-63},{"south":-90,"east":-42,"north":-21,"west":-63},{"south":-90,"east":-30,"north":9,"west":-42},{"south":9,"east":-117,"north":33,"west":-126},{"south":9,"east":-102,"north":30,"west":-117},{"south":9,"east":-90,"north":27,"west":-102},{"south":24,"east":-84,"north":30,"west":-90},{"south":9,"east":-69,"north":18,"west":-90},{"south":18,"east":-69,"north":24,"west":-90},{"south":36,"east":18,"north":42,"west":6},{"south":36,"east":30,"north":42,"west":18},{"south":9,"east":6,"north":39,"west":-9},{"south":9,"east":30,"north":36,"west":6},{"south":9,"east":51,"north":42,"west":30},{"south":24,"east":-69,"north":39,"west":-75},{"south":9,"east":-33,"north":30,"west":-69},{"south":30,"east":-33,"north":60,"west":-69},{"south":9,"east":-9,"north":30,"west":-33},{"south":30,"east":-9,"north":60,"west":-33}],"version":"adsbexchange backend"}');
-    get_receiver_defer = jQuery.Deferred().resolve(data);
-    test_chunk_defer = jQuery.Deferred().reject();
-} else {
-    // get configuration json files, will be used in initialize function
-    get_receiver_defer = jQuery.ajax({
-        url: 'data/receiver.json',
-        cache: false,
-        dataType: 'json',
-        timeout: 10000,
-    });
-    test_chunk_defer = jQuery.ajax({
+function chunksDefer() {
+    return jQuery.ajax({
         url:'chunks/chunks.json',
         cache: false,
         dataType: 'json',
@@ -363,10 +365,63 @@ if (uuid) {
     });
 }
 
-jQuery.getJSON(databaseFolder + "/icao_aircraft_types2.js").done(function(typeLookupData) {
-    _aircraft_type_cache = typeLookupData;
-});
-jQuery.getJSON(databaseFolder + "/ranges.js").done(function(ranges) {
+function handleJsonWorker(e) {
+    const url = e.data.url;
+    //console.log("url finished: " + url);
+    const defer = g.jwr[url];
+    delete g.jwr[url];
+
+    defer.resolve(e.data.json);
+};
+
+function jsonGetWorker(url) {
+    const defer = jQuery.Deferred();
+    g.jwr[url] = defer;
+    const wid = g.jsonGetId++ % g.jsonWorker.length;
+    //console.log(`using worker ${wid}`);
+    g.jsonWorker[wid].postMessage(url);
+
+    return defer;
+}
+
+g.jWorkers = 0;
+if (g.jWorkers) {
+    g.jwr = {};
+
+    g.jsonWorker = [];
+    g.jsonGetId = 0;
+
+    for (let i = 0; i < g.jWorkers; i++) {
+        const worker = new Worker("jsonWorker.js");
+        g.jsonWorker.push(worker);
+        worker.onmessage = handleJsonWorker;
+    }
+
+}
+
+let get_receiver_defer;
+let test_chunk_defer;
+const hostname = window.location.hostname;
+if (uuid) {
+    // don't need receiver / chunks json
+} else if (0 || (adsbexchange && (hostname.startsWith('globe.') || hostname.startsWith('globe-')))) {
+    console.log("Using adsbexchange fast-path load!");
+    let data = {"zstd":true,"reapi":true,"refresh":1600,"history":1,"dbServer":true,"binCraft":true,"globeIndexGrid":3,"globeIndexSpecialTiles":[],"version":"adsbexchange backend"};
+    get_receiver_defer = jQuery.Deferred().resolve(data);
+    test_chunk_defer = jQuery.Deferred().reject();
+} else {
+    // get configuration json files, will be used in initialize function
+
+    {get_receiver_defer = jQuery.ajax({
+        url: 'data/receiver.json',
+        cache: false,
+        dataType: 'json',
+        timeout: 10000,
+    });}
+    {test_chunk_defer = chunksDefer();}
+}
+
+{jQuery.getJSON(databaseFolder + "/ranges.js").done(function(ranges) {
     if (!ranges || !ranges.military) {
         console.error("couldn't load milRanges.");
         return;
@@ -379,7 +434,7 @@ jQuery.getJSON(databaseFolder + "/ranges.js").done(function(ranges) {
             continue;
         milRanges.push([a, b]);
     }
-});
+});}
 
 
 let heatmapLoadingState = {};
@@ -404,13 +459,13 @@ function loadHeatChunk() {
         num: heatmapLoadingState.index,
         xhr: arraybufferRequest,
     });
-    req.done(function (responseData) {
+    {req.done(function (responseData) {
         heatChunks[this.num] = responseData;
         loadHeatChunk();
-    });
-    req.fail(function(jqxhr, status, error) {
+    });}
+    {req.fail(function(jqxhr, status, error) {
         loadHeatChunk();
-    });
+    });}
     heatmapLoadingState.index++;
 }
 
@@ -428,24 +483,9 @@ if (!heatmap) {
     heatmapLoadingState.index = 0;
     heatmapLoadingState.interval = interval;
     heatmapLoadingState.start = start;
+    // 2 async chains of heat chunk loading:
     loadHeatChunk();
     loadHeatChunk();
-}
-
-function historyQueued() {
-    if (!globeIndex && !uuid) {
-        let request = jQuery.ajax({ url: 'upintheair.json',
-            cache: true,
-            dataType: 'json' });
-        request.done(function(data) {
-            calcOutlineData = data;
-        });
-        request.always(function() {
-            configureReceiver.resolve();
-        });
-    } else {
-        configureReceiver.resolve();
-    }
 }
 
 if (uuid != null) {
@@ -454,6 +494,8 @@ if (uuid != null) {
     RefreshInterval = 5000;
     configureReceiver.resolve();
     //console.time("Downloaded History");
+    zstd = false;
+    init_zstddec();
 } else {
     get_receiver_defer.fail(function(data){
 
@@ -473,12 +515,12 @@ if (uuid != null) {
         RefreshInterval = data.refresh;
         nHistoryItems = (data.history < 2) ? 0 : data.history;
         binCraft = data.binCraft ? true : false || data.aircraft_binCraft ? true : false;
-        zstd = data.zstd ? true : false;
+        zstd = data.zstd;
         reApi = data.reapi ? true : false;
         if (usp.has('noglobe') || usp.has('ptracks')) {
             data.globeIndexGrid = null; // disable globe on user request
         }
-        dbServer = (data.dbServer && data.globeIndexGrid != null) ? true : false;
+        dbServer = (data.dbServer) ? true : false;
 
         if (heatmap || replay) {
             if (replay && data.globeIndexGrid != null)
@@ -486,7 +528,6 @@ if (uuid != null) {
             HistoryChunks = false;
             nHistoryItems = 0;
             get_history();
-            historyQueued();
         } else if (data.globeIndexGrid != null) {
             HistoryChunks = false;
             nHistoryItems = 0;
@@ -504,7 +545,6 @@ if (uuid != null) {
             }
 
             get_history();
-            historyQueued();
         } else {
             test_chunk_defer.done(function(data) {
                 HistoryChunks = true;
@@ -516,19 +556,40 @@ if (uuid != null) {
                 if (enable_uat)
                     console.log("UAT/978 enabled!");
                 get_history();
-                historyQueued();
             }).fail(function() {
                 HistoryChunks = false;
                 get_history();
-                historyQueued();
             });
         }
+
+        init_zstddec();
     });
 }
 
 function get_history() {
+    if (!loadFinished) {
+        if (!globeIndex && !uuid) {
+            let request = jQuery.ajax({ url: 'upintheair.json',
+                cache: true,
+                dataType: 'json' });
+            request.done(function(data) {
+                calcOutlineData = data;
+            });
+            request.always(function() {
+                configureReceiver.resolve();
+            });
+        } else {
+            configureReceiver.resolve();
+        }
+    }
+
+    deferHistory = [];
+    HistoryItemsLoaded = 0;
 
     if (nHistoryItems > 0) {
+        jQuery("#loader_progress").attr('max',nHistoryItems + 1);
+        console.time("Downloaded History");
+
         nHistoryItems++;
         let request = jQuery.ajax({ url: 'data/aircraft.json',
             timeout: historyTimeout*800,
@@ -543,35 +604,37 @@ function get_history() {
                 dataType: 'json' });
             deferHistory.push(request);
         }
-    }
 
-    if (HistoryChunks) {
-        if (nHistoryItems > 0) {
-            console.log("Starting to load history (" + nHistoryItems + " chunks)");
-            console.time("Downloaded History");
+        if (HistoryChunks) {
+            //console.log("Starting to load history (" + nHistoryItems + " chunks)");
             for (let i = chunkNames.length-1; i >= 0; i--) {
                 get_history_item(i);
             }
+        } else  {
+            //console.log("Starting to load history (" + nHistoryItems + " items)");
+            for (let i = nHistoryItems-1; i >= 0; i--) {
+                get_history_item(i);
+            }
         }
-    } else if (nHistoryItems > 0) {
-        console.log("Starting to load history (" + nHistoryItems + " items)");
-        console.time("Downloaded History");
-        // Queue up the history file downloads
-        for (let i = nHistoryItems-1; i >= 0; i--) {
-            get_history_item(i);
-        }
+
     }
+    historyQueued.resolve();
 }
 
 function get_history_item(i) {
-
     let request;
 
     if (HistoryChunks) {
-        request = jQuery.ajax({ url: 'chunks/' + chunkNames[i],
-            timeout: historyTimeout * 1000,
-            dataType: 'json'
-        });
+        const url = 'chunks/' + chunkNames[i];
+
+        if (g.jWorkers) {
+            request = jsonGetWorker(url);
+        } else {
+            request = jQuery.ajax({ url: url,
+                timeout: historyTimeout * 1000,
+                dataType: 'json'
+            });
+        }
     } else {
 
         request = jQuery.ajax({ url: 'data/history_' + i + '.json',
@@ -579,6 +642,15 @@ function get_history_item(i) {
             cache: false,
             dataType: 'json' });
     }
+
+    request
+        .done(function(json) {
+            jQuery("#loader_progress").attr('value',++HistoryItemsLoaded);
+        })
+        .fail(function(jqxhr, status, error) {
+            jQuery("#loader_progress").attr('value',++HistoryItemsLoaded);
+        });
+
     deferHistory.push(request);
 }
 
@@ -600,25 +672,6 @@ function setCookie(cname, cvalue, exdays) {
     document.cookie = cname + "=" + cvalue + ";" + expires + ";path=/";
 }
 
-
-function globeRateUpdate() {
-    if (adsbexchange) {
-        dynGlobeRate = true;
-        const cookieExp = getCookie('adsbx_sid').split('_')[0];
-        const ts = new Date().getTime();
-        if (!cookieExp || cookieExp < ts + 3600*1000)
-            setCookie('adsbx_sid', ((ts + 2*86400*1000) + '_' + Math.random().toString(36).substring(2, 15)), 2);
-    }
-    if (dynGlobeRate) {
-        jQuery.ajax({url:'/globeRates.json', cache: false, dataType: 'json', }).done(function(data) {
-            if (data.simload != null)
-                globeSimLoad = data.simload;
-            if (data.refresh != null && globeIndex)
-                RefreshInterval = data.refresh;
-        });
-    }
-}
-globeRateUpdate();
 
 const toggles = {};
 
@@ -645,8 +698,9 @@ Toggle.prototype.init = function() {
             + '</div>'));
     }
 
-    if (this.button)
-        jQuery(this.button).on('click', this.toggle.bind(this));
+    if (this.button) {
+        jQuery(this.button).on('click', () => {this.toggle()});
+    }
 
     if (loStore[this.key] == 'true')
         this.state = true;
@@ -747,38 +801,6 @@ if (!Object.entries) {
   };
 }
 
-const filters = {};
-
-function Filter(arg) {
-    this.key = arg.key;
-    this.name = arg.name || arg.key;
-
-    this.id = 'filters_' + this.key;
-
-    filters[this.key] = this;
-
-    this.init();
-}
-
-Filter.prototype.reset = function() {
-    jQuery('#' + this.id).val("");
-    jQuery('#' + this.id).blur();
-    this.update();
-}
-
-Filter.prototype.init = function() {
-    jQuery(this.container).append((
-        '<tr><td><form id="'+ this.id +'">'
-        + '<div class="infoBlockTitleText">Filter by '+ this.name +':</div>'
-        + '<input id="'+ this.id+ '_input" name="textInput" type="text" class="searchInput" maxlength="4096">'
-        + '<button class="formButton" type="submit">Filter</button>'
-        + '<button class="formButton" type="reset">Reset</button>'
-        + '</form></td></tr>'
-    ));
-    jQuery('#' + this.id).on('submit', this.update);
-    jQuery('#' + this.id).on('reset', this.reset);
-}
-
 let custom_layers = new ol.Collection();
 function add_kml_overlay(url, name, opacity) {
     custom_layers.push(new ol.layer.Vector({
@@ -794,25 +816,61 @@ function add_kml_overlay(url, name, opacity) {
         zIndex: 99,
     }));
 }
-let zstdDecode = null;
-let inhibitFetch = false;
+
+
 function webAssemblyFail(e) {
     zstdDecode = null;
-    console.log(e);
-    console.error("Error loading zstddec, probable cause: webassembly not present or not working");
     zstd = false;
+    binCraft = false;
     if (adsbexchange && !uuid) {
         inhibitFetch = true;
         reApi = false;
         jQuery("#generic_error_detail").text("Your browser is not supporting webassembly, this website does not work without webassembly.");
         jQuery("#generic_error").css('display','block');
     }
+    if (e) {
+        console.log(e);
+    }
+    console.error("Error loading zstddec, probable cause: webassembly not present or not working");
 }
 
-try {
-    zstddec.decoder = new zstddec.ZSTDDecoder();
-    zstddec.promise = zstddec.decoder.init();
-    zstdDecode = zstddec.decoder.decode;
-} catch (e) {
-    webAssemblyFail(e);
+function init_zstddec() {
+    if (!zstd) {
+        zstdDefer.resolve();
+        return;
+    }
+    try {
+        zstddec.decoder = new zstddec.ZSTDDecoder();
+        zstddec.promise = zstddec.decoder.init();
+        zstdDecode = zstddec.decoder.decode;
+    } catch (e) {
+        webAssemblyFail(e);
+        zstdDefer.resolve();
+        return;
+    }
+
+    if (!zstdDecode) {
+        zstdDefer.resolve();
+    } else {
+        try {
+            zstddec.promise.then(function() {
+                zstdDefer.resolve();
+            });
+        } catch (e) {
+            webAssemblyFail(e);
+            zstdDefer.resolve();
+        }
+    }
 }
+
+
+let onMobile = (
+    () => {
+    let a = (navigator.userAgent||navigator.vendor||window.opera);
+    if(/(android|bb\d+|meego).+mobile|avantgo|bada\/|blackberry|blazer|compal|elaine|fennec|hiptop|iemobile|ip(hone|od)|iris|kindle|lge |maemo|midp|mmp|mobile.+firefox|netfront|opera m(ob|in)i|palm( os)?|phone|p(ixi|re)\/|plucker|pocket|psp|series(4|6)0|symbian|treo|up\.(browser|link)|vodafone|wap|windows ce|xda|xiino/i.test(a)||/1207|6310|6590|3gso|4thp|50[1-6]i|770s|802s|a wa|abac|ac(er|oo|s\-)|ai(ko|rn)|al(av|ca|co)|amoi|an(ex|ny|yw)|aptu|ar(ch|go)|as(te|us)|attw|au(di|\-m|r |s )|avan|be(ck|ll|nq)|bi(lb|rd)|bl(ac|az)|br(e|v)w|bumb|bw\-(n|u)|c55\/|capi|ccwa|cdm\-|cell|chtm|cldc|cmd\-|co(mp|nd)|craw|da(it|ll|ng)|dbte|dc\-s|devi|dica|dmob|do(c|p)o|ds(12|\-d)|el(49|ai)|em(l2|ul)|er(ic|k0)|esl8|ez([4-7]0|os|wa|ze)|fetc|fly(\-|_)|g1 u|g560|gene|gf\-5|g\-mo|go(\.w|od)|gr(ad|un)|haie|hcit|hd\-(m|p|t)|hei\-|hi(pt|ta)|hp( i|ip)|hs\-c|ht(c(\-| |_|a|g|p|s|t)|tp)|hu(aw|tc)|i\-(20|go|ma)|i230|iac( |\-|\/)|ibro|idea|ig01|ikom|im1k|inno|ipaq|iris|ja(t|v)a|jbro|jemu|jigs|kddi|keji|kgt( |\/)|klon|kpt |kwc\-|kyo(c|k)|le(no|xi)|lg( g|\/(k|l|u)|50|54|\-[a-w])|libw|lynx|m1\-w|m3ga|m50\/|ma(te|ui|xo)|mc(01|21|ca)|m\-cr|me(rc|ri)|mi(o8|oa|ts)|mmef|mo(01|02|bi|de|do|t(\-| |o|v)|zz)|mt(50|p1|v )|mwbp|mywa|n10[0-2]|n20[2-3]|n30(0|2)|n50(0|2|5)|n7(0(0|1)|10)|ne((c|m)\-|on|tf|wf|wg|wt)|nok(6|i)|nzph|o2im|op(ti|wv)|oran|owg1|p800|pan(a|d|t)|pdxg|pg(13|\-([1-8]|c))|phil|pire|pl(ay|uc)|pn\-2|po(ck|rt|se)|prox|psio|pt\-g|qa\-a|qc(07|12|21|32|60|\-[2-7]|i\-)|qtek|r380|r600|raks|rim9|ro(ve|zo)|s55\/|sa(ge|ma|mm|ms|ny|va)|sc(01|h\-|oo|p\-)|sdk\/|se(c(\-|0|1)|47|mc|nd|ri)|sgh\-|shar|sie(\-|m)|sk\-0|sl(45|id)|sm(al|ar|b3|it|t5)|so(ft|ny)|sp(01|h\-|v\-|v )|sy(01|mb)|t2(18|50)|t6(00|10|18)|ta(gt|lk)|tcl\-|tdg\-|tel(i|m)|tim\-|t\-mo|to(pl|sh)|ts(70|m\-|m3|m5)|tx\-9|up(\.b|g1|si)|utst|v400|v750|veri|vi(rg|te)|vk(40|5[0-3]|\-v)|vm40|voda|vulc|vx(52|53|60|61|70|80|81|83|85|98)|w3c(\-| )|webc|whit|wi(g |nc|nw)|wmlb|wonu|x700|yas\-|your|zeto|zte\-/i.test(a.substr(0,4))) {
+        return true;
+    } else {
+        return false;
+    }
+}
+)();

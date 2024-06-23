@@ -3,26 +3,28 @@
 function PlaneObject(icao) {
     icao = `${icao}`;
 
-    Planes[icao] = this;
-    PlanesOrdered.push(this);
+    g.planes[icao] = this;
+    g.planesOrdered.push(this);
 
     // Info about the plane
     this.icao      = icao;
+
     // BPFV plane?
     if (typeof this.icao === 'string' && (
-        this.icao === '3eef53' || // TEST
         this.icao === '3d08d7' || // PF
         this.icao === '3d08df' || // PN
         this.icao === '3d08e9' || // PX
         this.icao === '3d08eb' || // PZ
-        this.icao === '3d1a5f' || // FV
         this.icao === '3d2580' )) // LK
     {
         this.bpfvPlane = true;
-        this.icaorange = { start: 0x000000, end: 0x000000, country: "BPFV", flag_image: "Germany_bpfv.png" };
+        this.country = "BPFV";
+        this.country_code = "bpfv";
     } else {
         this.bpfvPlane = false;
-        this.icaorange = findICAORange(icao);
+        const icaorange = findICAORange(icao);
+        this.country = icaorange.country;
+        this.country_code = icaorange.country_code;
     }
 
     this.numHex = parseInt(icao.replace('~', '1'), 16);
@@ -36,6 +38,8 @@ function PlaneObject(icao) {
     this.track_linesegs = [];
     this.history_size = 0;
     this.trace = []; // save last 30 seconds of positions
+    this.lastTraceTs = 0;
+    this.routeString = null;
 
     // Display info
     this.visible = false;
@@ -64,6 +68,7 @@ function PlaneObject(icao) {
 
 PlaneObject.prototype.setNull = function() {
     this.flight = null;
+    this.flightTs = 0;
     this.name = 'no callsign';
     this.squawk    = null;
     this.category  = null;
@@ -135,6 +140,7 @@ PlaneObject.prototype.setNull = function() {
     this.last_message_time = NaN;
     this.seen_pos = NaN;
     this.position_time = NaN;
+    this.last_info_server = 0;
 
     this.last = 0; // last json this plane was included in
 
@@ -149,6 +155,7 @@ PlaneObject.prototype.setNull = function() {
 
 function planeCloneState(target, source) {
     target.flight = source.flight;
+    target.flightTs = source.flightTs;
     target.name = source.name;
     target.squawk = source.squawk;
     target.category = source.category;
@@ -220,7 +227,7 @@ PlaneObject.prototype.createFeatures = function() {
     this.trail_features = new ol.source.Vector();
 
     this.layer = new ol.layer.Vector({
-        name: this.icao,
+        name: `${this.icao}`,
         isTrail: true,
         source: this.trail_features,
         declutter: false,
@@ -235,7 +242,7 @@ PlaneObject.prototype.createLabels = function() {
     this.trail_labels = new ol.source.Vector();
 
     this.layer_labels = new ol.layer.Vector({
-        name: this.icao + '_labels',
+        name: `${this.icao}_labels`,
         isTrail: true,
         source: this.trail_labels,
         declutter: true,
@@ -266,6 +273,17 @@ PlaneObject.prototype.isFiltered = function() {
         return true;
     }
 
+    for (const filter of filters_active) {
+        if (!this[filter.field] || !this[filter.field].toUpperCase().match(filter.PATTERN)) {
+            //this[filter.field] && console.log(this[filter.field].toUpperCase() + ' ' + filter.PATTERN);
+            return true;
+        }
+    }
+
+    if (g.icao_nt_only && this.addrtype != 'adsb_icao_nt') {
+        return true;
+    }
+
     if (onlySelected && !this.selected) {
         return true;
     }
@@ -278,14 +296,6 @@ PlaneObject.prototype.isFiltered = function() {
         return true;
     }
 
-    if (onlyDataSource && this.dataSource != onlyDataSource) {
-        return true;
-    }
-
-    if (filterTISB && this.dataSource == "tisb") {
-        return true;
-    }
-
     if (!filterTracks && altFiltered(this.altitude))
         return true;
 
@@ -293,36 +303,17 @@ PlaneObject.prototype.isFiltered = function() {
         return true;
     }
 
-    let flags = PlaneFilter.flagFilter;
+    const flags = PlaneFilter.flagFilter;
     if (flags && flags.length > 0) {
         let found = false;
-        for (let i in flags) {
-            if (this[flags[i]]) {
+        for (const flag of flags) {
+            if (this[flag]) {
                 found = true;
             }
         }
         if (!found) {
             return true;
         }
-    }
-
-    if (PlaneFilter.icao && !this.icao.match(PlaneFilter.icao) ) {
-        return true;
-    }
-
-    if (PlaneFilter.type && !( (this.icaoType || 'UNKNOWN').match(PlaneFilter.type) )) {
-        return true;
-    }
-
-    if (PlaneFilter.description && !( (this.typeDescription || 'UNKNOWN' ).match(PlaneFilter.description) )) {
-        return true;
-    }
-
-    if (PlaneFilter.callsign
-        && (!this.flight || !this.flight.match(PlaneFilter.callsign))
-        && (!this.squawk || !this.squawk.match(PlaneFilter.callsign))
-    ) {
-        return true;
     }
 
     // filter out ground vehicles
@@ -510,7 +501,7 @@ PlaneObject.prototype.updateTrack = function(now, last, serverTrack, stale) {
     // Time difference between two position updates should not be much
     // greater than the difference between data inputs
     let time_difference = (this.position_time - this.prev_time) - 2;
-    if (!loadFinished || serverTrack)
+    if (g.refreshHistory || !loadFinished || serverTrack)
         time_difference = (this.position_time - this.prev_time) - Math.min(60, now - last);
 
     //let stale_timeout = lastseg.estimated ? 5 : 10;
@@ -540,6 +531,11 @@ PlaneObject.prototype.updateTrack = function(now, last, serverTrack, stale) {
     // Makes stale check more accurate for example for 30s spaced history points
 
     let estimated = (time_difference > stale_timeout) || ((now - this.position_time) > stale_timeout) || stale;
+
+    if (estimated) {
+        //console.trace();
+        //console.log('estimated ' + new Date(1000 * this.position_time) + ' ' + this.position);
+    }
 
     /*
     let track_change = this.track != null ? Math.abs(this.tail_track - this.track) : NaN;
@@ -678,16 +674,6 @@ PlaneObject.prototype.updateTrack = function(now, last, serverTrack, stale) {
     return this.updateTrackPrev();
 };
 
-// This is to remove the line from the screen if we deselect the plane
-PlaneObject.prototype.clearLines = function() {
-    this.linesDrawn = false;
-    if (this.layer && this.layer.getVisible()) {
-        this.layer.setVisible(false);
-    }
-    if (this.layer_labels && this.layer_labels.getVisible())
-        this.layer_labels.setVisible(false);
-};
-
 PlaneObject.prototype.getDataSourceNumber = function() {
     if (this.dataSource == "modeS")
         return 5;
@@ -779,6 +765,7 @@ PlaneObject.prototype.getMarkerColor = function(options) {
 };
 
 function altitudeColor(altitude) {
+    altitude = adjust_baro_alt(altitude);
     let h, s, l;
 
     if (altitude == null) {
@@ -790,6 +777,10 @@ function altitudeColor(altitude) {
         s = ColorByAlt.ground.s;
         l = ColorByAlt.ground.l;
     } else {
+        const altRound = (altitude < 8000) ? 50 : ((webgl && !pTracks && !SelectedAllPlanes) ? 200 : 500);
+        // round altitude to limit the number of colors used
+        altitude = altRound * Math.round(altitude / altRound);
+
         s = ColorByAlt.air.s;
 
         // find the pair of points the current altitude lies between,
@@ -862,7 +853,7 @@ PlaneObject.prototype.updateIcon = function() {
             || (zoomLvl >= labelZoomGround - 2 && this.speed > 5 && !this.fakeHex)
             || (zoomLvl >= labelZoomGround + 0 && !this.fakeHex)
             || (zoomLvl >= labelZoomGround + 1)
-            || (this.selected && !SelectedAllPlanes)
+            || this.selected
         )
     ) {
         let callsign = "";
@@ -872,6 +863,8 @@ PlaneObject.prototype.updateIcon = function() {
             callsign =  'reg: ' + this.registration;
         else
             callsign =   'hex: ' + this.icao;
+        if (useRouteAPI && this.routeString)
+            callsign += ' - ' + this.routeString;
 
         const unknown = NBSP+NBSP+"?"+NBSP+NBSP;
 
@@ -879,7 +872,7 @@ PlaneObject.prototype.updateIcon = function() {
         if (labelsGeom) {
             alt = adjust_geom_alt(this.alt_geom, this.position);
         } else {
-            alt = this.altitude;
+            alt = adjust_baro_alt(this.altitude);
         }
         let altString = (alt == null) ? unknown : format_altitude_brief(alt, this.vert_rate, DisplayUnits, showLabelUnits);
         let speedString = (this.speed == null) ? (NBSP+'?'+NBSP) : format_speed_brief(this.speed, DisplayUnits, showLabelUnits).padStart(3, NBSP);
@@ -945,7 +938,7 @@ PlaneObject.prototype.updateIcon = function() {
 
             addToIconCache.push([svgKey, null, svgURI]);
 
-            if (TrackedAircraftPositions < 200) {
+            if (true || TrackedAircraftPositions < 200) {
                 this.markerIcon = new ol.style.Icon({
                     scale: this.scale,
                     imgSize: [this.shape.w, this.shape.h],
@@ -976,7 +969,7 @@ PlaneObject.prototype.updateIcon = function() {
 
     let styleKey = (webgl ? '' : svgKey) + '!' + labelText + '!' + this.scale;
 
-    if (this.styleKey != styleKey) {
+    if (this.styleKey != styleKey || !this.marker.getStyle()) {
         this.styleKey = styleKey;
         let style;
         if (labelText) {
@@ -1032,6 +1025,8 @@ PlaneObject.prototype.updateIcon = function() {
 
 PlaneObject.prototype.processTrace = function() {
 
+    const old_last_info_server = this.last_info_server;
+
     if (this.fullTrace && !this.fullTrace.trace) {
         this.fullTrace = null;
     }
@@ -1057,8 +1052,7 @@ PlaneObject.prototype.processTrace = function() {
     let pointsRecent = 0;
 
     if (!traceOpts.showTime) {
-        this.track_linesegs = [];
-        this.remakeTrail();
+        this.resetTrail();
     }
 
     let firstPos = null;
@@ -1086,6 +1080,7 @@ PlaneObject.prototype.processTrace = function() {
             for (let i = 0; i < recent.length; i++) {
                 const entry = recent[i];
                 if (trace.length == 0 || entry[0] > trace[trace.length - 1][0]) {
+                    //console.log("pushing " + entry[0]);
                     trace.push(entry);
                 }
             }
@@ -1102,18 +1097,29 @@ PlaneObject.prototype.processTrace = function() {
         if (legEnd != null)
             end = legEnd;
 
-        if (traceOpts.startStamp != null || traceOpts.endStamp != null) {
+        if (traceOpts.startStamp != null) {
+            let found = 0;
             for (let i = start; i < end; i++) {
                 const timestamp = trace[i][0];
-
-                if (traceOpts.startStamp != null && timestamp < traceOpts.startStamp) {
-                    start = i + 1;
-                }
-                if (traceOpts.endStamp != null && timestamp > traceOpts.endStamp) {
-                    end = i;
+                if (timestamp >= traceOpts.startStamp) {
+                    start = i;
+                    found = 1
                     break;
                 }
             }
+            if (!found) { start = end = 0; }
+        }
+        if (traceOpts.endStamp != null) {
+            let found = 0;
+            for (let i = end - 1; i >= start; i--) {
+                const timestamp = trace[i][0];
+                if (timestamp <= traceOpts.endStamp) {
+                    end = i + 1;
+                    found = 1
+                    break;
+                }
+            }
+            if (!found) { start = end = 0; }
         }
 
         if (lastLeg && !showTrace) {
@@ -1133,9 +1139,14 @@ PlaneObject.prototype.processTrace = function() {
             let stale = state[6] & 1;
             const leg_marker = state[6] & 2;
 
+            if (1000 * timestamp > new Date().getTime()) {
+                console.log('in the future ' + new Date(timestamp * 1000) + ' ' + state.join(','));
+            }
             // no going backwards in time
-            if (timestamp < _now)
+            if (timestamp < _now) {
+                console.log('backwards trace wat? ' + timestamp + ' ' + state.join(','));
                 continue;
+            }
 
             _now = timestamp;
 
@@ -1193,10 +1204,12 @@ PlaneObject.prototype.processTrace = function() {
                     console.log('leg zulu: ' + zuluTime(new Date(this.leg_ts * 1000)) + ' epoch: ' + this.leg_ts);
                 }
             }
-            if (legStart != null && legStart > 0 && legStart == i)
+            if (legStart != null && legStart > 0 && legStart == i) {
                 this.leg_ts = _now;
-            if (legEnd != null && legEnd < trace.length && legEnd == i + 1)
+            }
+            if (legEnd != null && legEnd < trace.length && legEnd == i + 1) {
                 this.leg_ts = _now;
+            }
 
             if (_last - _now > 320) {
                 stale = true;
@@ -1225,8 +1238,10 @@ PlaneObject.prototype.processTrace = function() {
             break;
         const state = this.trace[i];
         // no going backwards in time
-        if (state.now <= _now)
+        if (state.now <= _now) {
+            //console.log(new Date(1000 * state.now));
             continue;
+        }
 
         _now = state.now;
         this.position = state.position;
@@ -1246,7 +1261,9 @@ PlaneObject.prototype.processTrace = function() {
     }
 
 
-    if ((this.position == null || tempPlane.position != null) && tempPlane.last_message_time >= this.last_message_time && !showTrace && !replay) {
+    //if ((this.position == null || tempPlane.position != null) && tempPlane.position_time > this.position_time && !showTrace && !replay) {}
+    //console.log(tempPlane.position_time + ' ' + this.position_time);
+    if (tempPlane.last_message_time > this.last_message_time && !showTrace && !replay) {
         planeCloneState(this, tempPlane);
         this.updateTrack(this.position_time, _last);
     }
@@ -1315,17 +1332,24 @@ PlaneObject.prototype.processTrace = function() {
         updateAddressBar();
     }
 
+    this.updateTick();
+
     if (debugTracks) {
         console.log('3h: ' + pointsRecent.toString().padStart(4, ' ') + ' total: ' + points_in_trace);
+    }
+
+    if (old_last_info_server > this.last_info_server || !this.last_info_server) {
+        this.last_info_server = old_last_info_server;
     }
 };
 
 PlaneObject.prototype.updatePositionData = function(now, last, data, init) {
     if (this.position && SitePosition) {
-        if (pTracks && this.sitedist)
+        if (pTracks && this.sitedist) {
             this.sitedist = Math.max(ol.sphere.getDistance(SitePosition, this.position), this.sitedist);
-        else
+        } else if (!init) {
             this.sitedist = ol.sphere.getDistance(SitePosition, this.position);
+        }
     }
 
     if (!globeIndex || this.selected || SelectedAllPlanes || replay) {
@@ -1333,18 +1357,21 @@ PlaneObject.prototype.updatePositionData = function(now, last, data, init) {
         this.drawLine |= newPos;
     }
 
-    if (globeIndex && this.position && this.position_time) {
-        this.trace.push({
-            now: this.position_time,
-            position: this.position,
-            altitude: this.altitude,
-            alt_rounded: this.alt_rounded,
-            speed: this.speed,
-            track: this.track,
-            rotation: this.rotation,
-        });
-        if (this.trace.length > 100) {
-            this.trace.slice(-15);
+    if (globeIndex && !replay && this.position && this.position_time) {
+        if (this.position_time > this.lastTraceTs + 0.1) {
+            this.lastTraceTs = this.position_time;
+            this.trace.push({
+                now: this.position_time,
+                position: this.position,
+                altitude: this.altitude,
+                alt_rounded: this.alt_rounded,
+                speed: this.speed,
+                track: this.track,
+                rotation: this.rotation,
+            });
+            if (this.trace.length > 100) {
+                this.trace = this.trace.slice(-80);
+            }
         }
     }
 
@@ -1354,12 +1381,14 @@ PlaneObject.prototype.updatePositionData = function(now, last, data, init) {
 PlaneObject.prototype.updateData = function(now, last, data, init) {
     // get location data first, return early if only those are needed.
 
+    this.last_info_server = now;
+
     let isArray = Array.isArray(data);
     // [.hex, .alt_baro, .gs, .track, .lat, .lon, .seen_pos, "mlat"/"tisb"/.type , .flight, .messages]
     //    0      1        2     3       4     5     6                 7               8        9
     // this format is only valid for chunk loading the history
     const alt_baro = isArray? data[1] : data.alt_baro;
-    const gs = isArray? data[2] : data.gs;
+    let gs = isArray? data[2] : data.gs;
     const track = isArray? data[3] : data.track;
     const lat = isArray? data[4] : data.lat;
     const lon = isArray? data[5] : data.lon;
@@ -1458,15 +1487,7 @@ PlaneObject.prototype.updateData = function(now, last, data, init) {
         this.request_rotation_from_track = true;
     }
 
-    if (flight == null || flight == "@@@@@@@@") {
-        if (!replay) {
-            this.flight = null;
-            this.name ='no callsign';
-        }
-    } else {
-        this.flight = `${flight}`;
-        this.name = this.flight.trim() || 'empty callsign';
-    }
+    this.setFlight(flight);
 
     if (mlat && noMLAT) {
         this.dataSource = "modeS";
@@ -1514,6 +1535,10 @@ PlaneObject.prototype.updateData = function(now, last, data, init) {
         this.messageRateOld = messageRate;
     }
     this.messages = data.messages;
+
+    if (data.messageRate != null) {
+        this.messageRate = data.messageRate;
+    }
 
     if (data.rssi != null && data.rssi > -49.4) {
         if (!globeIndex && this.rssi != null && RefreshInterval < 1500) {
@@ -1625,16 +1650,25 @@ PlaneObject.prototype.updateData = function(now, last, data, init) {
         this.nogps = data.nogps;
     }
     this.rId = data.rId;
+    if (!this.dbinfoLoaded) {
+        this.checkForDB(data);
+    }
 
-    this.checkForDB(data);
+    this.setTypeFlagsReg(data);
+
     this.last = now;
     this.updatePositionData(now, last, data, init);
     return;
 };
 
 PlaneObject.prototype.updateTick = function(redraw) {
-    this.visible = this.checkVisible() && !this.isFiltered();
+    this.updateVisible();
     this.updateFeatures(redraw);
+};
+
+PlaneObject.prototype.updateVisible = function() {
+    this.inView = inView(this.position, lastRenderExtent);
+    this.visible = this.checkVisible() && !this.isFiltered();
 };
 
 PlaneObject.prototype.updateFeatures = function(redraw) {
@@ -1648,7 +1682,6 @@ PlaneObject.prototype.updateFeatures = function(redraw) {
     if (!this.visible && this.lastVisible) {
         this.clearMarker();
         this.clearLines();
-        deselect(this);
     }
 
     this.lastVisible = this.visible;
@@ -1660,10 +1693,14 @@ PlaneObject.prototype.clearMarker = function() {
         PlaneIconFeatures.removeFeature(this.marker);
         this.marker.visible = false;
     }
+    delete this.marker;
     if (this.glMarker && this.glMarker.visible) {
         webglFeatures.removeFeature(this.glMarker);
         this.glMarker.visible = false;
     }
+    delete this.glMarker;
+    delete this.styleKey;
+    delete this.olPoint;
 };
 
 // Update our marker on the map
@@ -1700,17 +1737,17 @@ PlaneObject.prototype.updateMarker = function(moved) {
             console.log(baseMarkerKey);
         }
         if (!baseMarker) {
-            basemarker = ['pumpkin', 1];
+            baseMarker = ['pumpkin', 1];
         }
         this.shape = shapes[baseMarker[0]];
         this.baseScale = baseMarker[1] * 0.96;
     }
     this.scale = iconSize * this.baseScale;
-    this.strokeWidth = outlineWidth * ((this.selected && !SelectedAllPlanes && !onlySelected) ? 1.15 : 0.7) / this.baseScale;
+    this.strokeWidth = outlineWidth * ((this.selected && !SelectedAllPlanes && !onlySelected) ? 0.85 : 0.7) / this.baseScale;
 
     if (!this.marker && (!webgl || enableLabels)) {
         this.marker = new ol.Feature(this.olPoint);
-        this.marker.hex = this.icao;
+        this.marker.hex = `${this.icao}`;
     }
     if (webgl && !enableLabels && this.marker) {
         if (this.marker.visible) {
@@ -1722,17 +1759,15 @@ PlaneObject.prototype.updateMarker = function(moved) {
     if (webgl) {
         if (!this.glMarker) {
             this.glMarker = new ol.Feature(this.olPoint);
-            this.glMarker.hex = this.icao;
+            this.glMarker.hex = `${this.icao}`;
         }
 
         this.setMarkerRgb();
         const iconRotation = this.shape.noRotate ? 0 : this.rotation;
         this.glMarker.set('rotation', iconRotation * Math.PI / 180.0 + mapOrientation);
-        this.glMarker.set('size', this.scale * Math.max(this.shape.w, this.shape.h));
-        this.glMarker.set('cx', getSpriteX(this.shape) / glImapWidth);
-        this.glMarker.set('cy', getSpriteY(this.shape) / glImapHeight);
-        this.glMarker.set('dx', (getSpriteX(this.shape) + 1) / glImapWidth);
-        this.glMarker.set('dy', (getSpriteY(this.shape) + 1) / glImapHeight);
+        this.glMarker.set('scale', this.scale * Math.max(this.shape.w, this.shape.h) / glIconSize);
+        this.glMarker.set('sx', getSpriteX(this.shape) * glIconSize);
+        this.glMarker.set('sy', getSpriteY(this.shape) * glIconSize);
     }
 
     if (this.marker && (!webgl || enableLabels)) {
@@ -1870,7 +1905,9 @@ function altitudeLines (segment) {
 PlaneObject.prototype.updateLines = function() {
     this.drawLine = false;
     if (!this.visible || this.position == null || (!this.selected && !SelectedAllPlanes)) {
-        if (this.linesDrawn) this.clearLines();
+        if (this.linesDrawn) {
+            this.clearLines();
+        }
         return;
     }
 
@@ -1911,11 +1948,12 @@ PlaneObject.prototype.updateLines = function() {
         if ((filterTracks && altFiltered(seg.altitude)) || altitudeLines(seg) == nullStyle) {
             seg.feature = true;
         } else if (!seg.feature) {
-            seg.feature = new ol.Feature(seg.fixed);
-            seg.feature.setStyle(altitudeLines(seg));
-            seg.feature.hex = this.icao;
-            seg.feature.timestamp = seg.ts;
-            trail_add.push(seg.feature);
+            seg.feature = true;
+            let feature = new ol.Feature(seg.fixed);
+            feature.setStyle(altitudeLines(seg));
+            feature.hex = `${this.icao}`;
+            feature.timestamp = Number(seg.ts);
+            trail_add.push(feature);
         }
 
         if (seg.label) {
@@ -1935,7 +1973,7 @@ PlaneObject.prototype.updateLines = function() {
                 if (labelsGeom) {
                     alt = adjust_geom_alt(seg.alt_geom, seg.position);
                 } else {
-                    alt = seg.alt_real;
+                    alt = adjust_baro_alt(seg.alt_real);
                 }
 
                 if (alt == null) {
@@ -2007,7 +2045,7 @@ PlaneObject.prototype.updateLines = function() {
             seg.label.setStyle(
                 new ol.style.Style({
                     text: new ol.style.Text({
-                        text: text,
+                        text: `${text}`,
                         fill: fill,
                         stroke: labelStroke,
                         textAlign: 'left',
@@ -2021,11 +2059,11 @@ PlaneObject.prototype.updateLines = function() {
                         radius: 2 * globalScale,
                         fill: blackFill,
                     }),
-                    zIndex: zIndex,
+                    zIndex: Number(zIndex),
                 })
             );
-            seg.label.hex = this.icao;
-            seg.label.timestamp = seg.ts;
+            seg.label.hex = `${this.icao}`;
+            seg.label.timestamp = Number(seg.ts);
             seg.label.isLabel = true;
             label_add.push(seg.label)
         }
@@ -2055,7 +2093,12 @@ PlaneObject.prototype.updateLines = function() {
 
 };
 
-PlaneObject.prototype.remakeTrail = function() {
+PlaneObject.prototype.resetTrail = function() {
+    this.removeTrail();
+    this.track_linesegs = [];
+
+}
+PlaneObject.prototype.removeTrail = function() {
 
     if (this.trail_features)
         this.trail_features.clear();
@@ -2063,90 +2106,33 @@ PlaneObject.prototype.remakeTrail = function() {
         this.trail_labels.clear();
 
     for (let i in this.track_linesegs) {
-        this.track_linesegs[i].feature = undefined;
-        this.track_linesegs[i].label = undefined;
+        delete this.track_linesegs[i].feature;
+        delete this.track_linesegs[i].label;
     }
     this.elastic_feature = null;
-
-    /*
-    trailGroup.remove(this.layer);
-
-    this.trail_features = new ol.Collection();
-
-    this.layer = new ol.layer.Vector({
-        name: this.icao,
-        isTrail: true,
-        source: new ol.source.Vector({
-            features: this.trail_features,
-        }),
-        renderOrder: null,
-    });
-
-    trailGroup.push(this.layer);
-    */
-
 };
 
-PlaneObject.prototype.makeTR = function (trTemplate) {
-
-    this.trCache = [];
-    this.bgColorCache = undefined;
-    this.tr = trTemplate;
-
-    this.clickListener = function(evt) {
-        if (evt.srcElement instanceof HTMLAnchorElement) {
-            evt.stopPropagation();
-            return;
-        }
-
-        if(!mapIsVisible) {
-            selectPlaneByHex(this.icao, {follow: true});
-        } else {
-            selectPlaneByHex(this.icao, {follow: false});
-        }
-        evt.preventDefault();
-    }.bind(this);
-
-    this.tr.addEventListener('click', this.clickListener);
-
-    if (!globeIndex) {
-        this.dblclickListener = function(evt) {
-            if(!mapIsVisible) {
-                showMap();
-            }
-            selectPlaneByHex(this.icao, {follow: true});
-            evt.preventDefault();
-        }.bind(this);
-
-        this.tr.addEventListener('dblclick', this.dblclickListener);
+// This is to remove the line from the screen if we deselect the plane
+PlaneObject.prototype.clearLines = function() {
+    this.linesDrawn = false;
+    if (this.layer && this.layer.getVisible()) {
+        this.layer.setVisible(false);
+    }
+    if (this.layer_labels && this.layer_labels.getVisible()) {
+        this.layer_labels.setVisible(false);
     }
 };
-PlaneObject.prototype.destroyTR = function (trTemplate) {
-    if (this.tr == null)
-        return;
 
-    this.tr.removeEventListener('click', this.clickListener);
-    this.tr.removeEventListener('dblclick', this.dblclickListener);
-
-    if (this.tr.parentNode)
-        this.tr.parentNode.removeChild(this.tr);
-
-    this.tr = null;
-};
 PlaneObject.prototype.clearTrace = function() {
     this.clearTraceAfter = null;
-    this.linesDrawn = false;
-    if (this.trail_features) {
-        this.trail_features.clear();
-    }
-    if (this.trail_labels) {
-        this.trail_labels.clear();
-    }
-    this.elastic_feature = null;
 
-    this.recentTrace = null;
-    this.fullTrace = null;
-    this.track_linesegs = [];
+    this.clearLines();
+    this.removeTrail();
+
+    if (globeIndex) {
+        this.recentTrace = null;
+        this.fullTrace = null;
+    }
 }
 
 PlaneObject.prototype.destroyTrace = function() {
@@ -2162,6 +2148,59 @@ PlaneObject.prototype.destroyTrace = function() {
         this.layer_labels = null;
     }
 }
+
+PlaneObject.prototype.makeTR = function (trTemplate) {
+
+    this.trCache = [];
+    this.bgColorCache = undefined;
+    this.tr = trTemplate;
+
+    this.clickListener = (evt) => {
+        if (evt.srcElement instanceof HTMLAnchorElement) {
+            evt.stopPropagation();
+            return;
+        }
+
+        if(!mapIsVisible) {
+            selectPlaneByHex(this.icao, {follow: true});
+        } else {
+            selectPlaneByHex(this.icao, {follow: false});
+        }
+        evt.preventDefault();
+    };
+
+    this.tr.addEventListener('click', this.clickListener);
+
+    if (!globeIndex) {
+        this.dblclickListener = (evt) => {
+            if(!mapIsVisible) {
+                showMap();
+            }
+            selectPlaneByHex(this.icao, {follow: true});
+            evt.preventDefault();
+        };
+
+        this.tr.addEventListener('dblclick', this.dblclickListener);
+    }
+};
+PlaneObject.prototype.destroyTR = function (trTemplate) {
+    if (this.tr == null)
+        return;
+
+    this.tr.removeEventListener('click', this.clickListener);
+    this.tr.removeEventListener('dblclick', this.dblclickListener);
+
+    delete this.clickListener;
+    delete this.dblclickListener;
+
+    if (this.tr.parentNode) {
+        this.tr.parentNode.removeChild(this.tr);
+    }
+
+    this.tr.remove();
+
+    this.tr = null;
+};
 
 PlaneObject.prototype.destroy = function() {
     this.clearLines();
@@ -2295,61 +2334,74 @@ PlaneObject.prototype.altBad = function(newAlt, oldAlt, oldTime, data) {
 };
 
 PlaneObject.prototype.getAircraftData = function() {
+    if (0) {
+        this.dbinfoLoaded = true;
+        return;
+    }
+    if (this.dbLoad) {
+        return;
+    }
+    this.dbLoad = true;
+
     let req = dbLoad(this.icao);
 
-    req.done(function(data) {
-        //console.log('fromDB');
-        if (this.dbinfoLoaded)
-            return;
-        this.dbinfoLoaded = true;
-        if (data == null) {
-            //console.log(this.icao + ': Not found in database!');
-            return;
-        }
-        if (data == "strange") {
-            //console.log(this.icao + ': Database malfunction!');
-            return;
-        }
-
-
-        //console.log(this.icao + ': loaded!');
-        // format [r:0, t:1, f:2]
-
-        if (data[1]) {
-            this.icaoType = `${data[1]}`;
-            this.setTypeData();
-        }
-
-        if (data[3]) {
-            this.typeLong = `${data[3]}`;
-        }
-
-        if (data[2]) {
-            this.military = (data[2][0] == '1');
-            this.interesting = (data[2][1] == '1');
-            this.pia = (data[2][2] == '1');
-            this.ladd = (data[2][3] == '1');
-            if (this.pia)
-                this.registration = null;
-        }
-
-        if (data[0]) {
-            this.registration = `${data[0]}`;
-        }
-
-        this.dataChanged();
-
-        data = null;
-    }.bind(this));
-
-    req.fail(function(jqXHR,textStatus,errorThrown) {
-        if (textStatus == 'timeout') {
-            this.getAircraftData();
-        } else {
-            console.log(this.icao + ': Database load error: ' + textStatus + ' at URL: ' + jqXHR.url);
+    req.then(
+        data => {
+            //console.log('fromDB');
+            if (this.dbinfoLoaded)
+                return;
             this.dbinfoLoaded = true;
-        }
-    }.bind(this));
+            delete this.dbLoad;
+            if (data == null) {
+                //console.log(this.icao + ': Not found in database!');
+                return;
+            }
+            if (data == "strange") {
+                //console.log(this.icao + ': Database malfunction!');
+                return;
+            }
+
+
+            //console.log(this.icao + ': loaded!');
+            // format [r:0, t:1, f:2]
+
+            if (data[1]) {
+                this.icaoType = `${data[1]}`;
+                this.setTypeData();
+            }
+
+            if (data[3]) {
+                this.typeLong = `${data[3]}`;
+            }
+
+            if (data[2]) {
+                this.military = (data[2][0] == '1');
+                this.interesting = (data[2][1] == '1');
+                this.pia = (data[2][2] == '1');
+                this.ladd = (data[2][3] == '1');
+                if (this.pia)
+                    this.registration = null;
+            }
+
+            if (data[0]) {
+                this.registration = `${data[0]}`;
+            }
+
+            this.dataChanged();
+
+            data = null;
+        },
+        e => {
+            delete this.dbLoad;
+            if (e.http_status == 'timeout') {
+                this.getAircraftData();
+            } else if (e.http_status == 'other') {
+                this.dbinfoLoaded = true;
+            } else {
+                console.log(this.icao + ': Unrecognized Database load error: ' + e);
+                this.dbinfoLoaded = true;
+            }
+        });
 };
 
 PlaneObject.prototype.reapTrail = function() {
@@ -2364,7 +2416,7 @@ PlaneObject.prototype.reapTrail = function() {
         }
     }
     if (this.track_linesegs.length != oldSegs.length) {
-        this.remakeTrail();
+        this.removeTrail();
         this.updateTick(true);
     }
 };
@@ -2399,7 +2451,7 @@ PlaneObject.prototype.updateTraceData = function(state, _now) {
 
     this.position = [lon, lat];
     this.position_time = _now;
-    this.last_message_time = Math.max(_now, this.last_message_time);
+    this.last_message_time = _now;
     this.altitude = altitude;
 
     if (altitude && altitude != "ground" && this.geom_diff_ts && _now - this.geom_diff_ts < 60) {
@@ -2458,13 +2510,7 @@ PlaneObject.prototype.updateTraceData = function(state, _now) {
         this.rId = rId;
 
     if (data != null) {
-        if (data.flight == null || data.flight == "@@@@@@@@") {
-            this.flight = null;
-            this.name ='no callsign';
-        } else {
-            this.flight = `${data.flight}`;
-            this.name = this.flight.trim() || 'empty callsign';
-        }
+        this.setFlight(data.flight);
 
         if (data.alt_geom != null && !alt_geom && altitude != null && altitude != "ground") {
             //this.alt_geom = altitude + this.geom_diff;
@@ -2517,7 +2563,9 @@ PlaneObject.prototype.updateTraceData = function(state, _now) {
             this.nav_altitude = null;
         }
     }
-    if (this.addrtype.substring(0,4) == "adsb") {
+    if (!this.addrtype) {
+        this.dataSource = "unknown";
+    } else if (this.addrtype.substring(0,4) == "adsb") {
         this.dataSource = "adsb";
     } else if (this.addrtype.substring(0,4) == "adsr") {
         this.dataSource = "adsr";
@@ -2673,32 +2721,41 @@ PlaneObject.prototype.isNonIcao = function() {
 };
 
 PlaneObject.prototype.checkVisible = function() {
-    const zoomedOut = 2 * refreshInt() / globeSimLoad * globeTilesViewCount / 1000;
-    const jaeroTime = (this.dataSource == "adsc") ? jaeroTimeout : 0;
-    const mlatTime = (this.dataSource == "mlat") ? 25 : 0;
+    const refresh = lastRefreshInt / 1000;
+    const noInfoTimeout = replay ? 600 : (reApi ? (30 + 2 * refresh) : (30 + Math.min(1, (globeTilesViewCount / globeSimLoad)) * (2 * refresh)));
     const modeSTime = (guessModeS && this.dataSource == "modeS") ? 300 : 0;
-    const tisbReduction = (this.icao[0] == '~') ? 15 : 0;
+    const tisbReduction = (adsbexchange && this.icao[0] == '~') ? 15 : 0;
     // If no packet in over 58 seconds, clear the plane.
     // Only clear the plane if it's not selected individually
 
     // recompute seen and seen_pos
     let __now = now;
-    if (this.dataSource == "uat")
+    if (this.dataSource == "uat") {
         __now = uat_now;
+    }
     this.seen = Math.max(0, __now - this.last_message_time);
     this.seen_pos = Math.max(0, __now - this.position_time);
+    this.noInfoTime = __now - this.last_info_server;
 
-    return (
-        (!globeIndex && this.seen < (58 - tisbReduction + jaeroTime))
-        || (globeIndex && this.seen_pos < (40 + zoomedOut + jaeroTime + mlatTime + modeSTime - tisbReduction))
+    let timeout = seenTimeout;
+    if (this.dataSource == "mlat") { timeout = seenTimeoutMlat; }
+    else if (this.dataSource == "adsc") { timeout = jaeroTimeout; }
+
+    timeout += modeSTime - tisbReduction + refresh;
+
+    const res = (!globeIndex || icaoFilter || this.inView || this.selected || SelectedAllPlanes) && (
+        (!globeIndex && this.seen < timeout)
+        || (globeIndex && this.seen_pos < timeout && this.noInfoTime < noInfoTimeout)
         || this.selected
         || noVanish
-        || (nogpsOnly && this.nogps && this.seen < 15 * 60)
+        || (nogpsOnly && this.nogps && this.seen < 15 * 60) // ugly hard coded
     );
+
+    return res;
 };
 
 PlaneObject.prototype.setTypeData = function() {
-	if (_aircraft_type_cache == null || !this.icaoType || this.icaoType == this.icaoTypeCache)
+	if (g.type_cache == null || !this.icaoType || this.icaoType == this.icaoTypeCache)
         return;
     this.updateMarker();
     this.icaoTypeCache = this.icaoType;
@@ -2707,10 +2764,10 @@ PlaneObject.prototype.setTypeData = function() {
     if (typeCode == 'P8 ?') {
         typeCode = 'P8';
     }
-    if (!(typeCode in _aircraft_type_cache))
+    if (!(typeCode in g.type_cache))
         return;
 
-    let typeData = _aircraft_type_cache[typeCode];
+    let typeData = g.type_cache[typeCode];
     const typeLong = typeData[0];
     const desc = typeData[1];
     const wtc = typeData[2];
@@ -2722,39 +2779,40 @@ PlaneObject.prototype.setTypeData = function() {
         this.typeLong = `${typeLong}`;
 };
 
-PlaneObject.prototype.checkForDB = function(t) {
+PlaneObject.prototype.setTypeFlagsReg = function(data) {
+        if (data.t && data.t != this.icaoType) {
+            this.icaoType = `${data.t}`;
+            this.setTypeData();
+        }
+        if (data.dbFlags) {
+            this.military = data.dbFlags & 1;
+            this.interesting = data.dbFlags & 2;
+            this.pia = data.dbFlags & 4;
+            this.ladd = data.dbFlags & 8;
+            if (this.pia)
+                this.registration = null;
+        }
+        if (data.r) this.registration = `${data.r}`;
+}
+
+PlaneObject.prototype.checkForDB = function(data) {
     if (!this.dbinfoLoaded && this.icao >= 'ae6620' && this.icao <= 'ae6899') {
         this.icaoType = 'P8 ?';
         this.setTypeData();
     }
-    if (t) {
+    if (data) {
 
-        if (t.desc) this.typeLong = `${t.desc}`;
+        if (data.desc) this.typeLong = `${data.desc}`;
+        if (data.ownOp) this.ownOp = `${data.ownOp}`;
+        if (data.year) this.year = `${data.year}`;
 
-        if (t.ownOp) this.ownOp = `${t.ownOp}`;
-        if (t.year) this.year = `${t.year}`;
+        this.setTypeFlagsReg(data);
 
-        if (t.t) {
-            this.icaoType = `${t.t}`;
-            this.setTypeData();
-        }
-        if (t.dbFlags) {
-            this.military = t.dbFlags & 1;
-            this.interesting = t.dbFlags & 2;
-            this.pia = t.dbFlags & 4;
-            this.ladd = t.dbFlags & 8;
-            if (this.pia)
-                this.registration = null;
-        }
-
-        if (t.r) this.registration = `${t.r}`;
-
-        if (t.r || t.t) {
-            //console.log('fromTrace');
+        if (data.r || data.t) {
             this.dbinfoLoaded = true;
         }
     }
-    if (!this.dbinfoLoaded && (!dbServer || (dbServer && !globeIndex && this.selected) || replay)) {
+    if (!this.dbinfoLoaded && (!dbServer || replay || pTracks || heatmap)) {
         this.getAircraftData();
         return;
     }
@@ -2790,8 +2848,8 @@ PlaneObject.prototype.setProjection = function(arg) {
     //let trace = new Error().stack.toString();
     //console.log(lat + ' ' + trace);
 
-    // manual wrap around
-    if (webgl && Math.abs(CenterLon - lon) > 180) {
+    // manual wrap around (no longer necessary due to OpenLayers changing their webGL code)
+    if (0 && webgl && Math.abs(CenterLon - lon) > 180) {
         if (CenterLon < 0)
             lon -= 360;
         else
@@ -2818,14 +2876,119 @@ PlaneObject.prototype.setProjection = function(arg) {
         this.olPoint.setCoordinates(proj);
     }
 }
+
+PlaneObject.prototype.setFlight = function(flight) {
+    var currentTime = new Date().getTime()/1000;
+    if (flight == null) {
+        if (now - this.flightTs > 10 * 60) {
+            this.flight = null;
+            this.name ='no callsign';
+        }
+    } else if (flight == "@@@@@@@@") {
+        this.flight = null;
+        this.name ='no callsign';
+    } else {
+        this.flight = `${flight}`;
+        this.name = this.flight.trim() || 'empty callsign';
+        this.flightTs = now;
+
+        let currentName = this.name;
+        if (useRouteAPI) {
+            if (g.route_cache[currentName] === undefined &&
+                this.name &&
+                this.name != 'empty callsign' &&
+                this.seen < 60 &&
+                this.registration != this.name &&
+                this.position) {
+                // we have all the pieces that allow us to lookup a route
+                let route_check = { 'callsign': this.name, 'lat': this.position[1], 'lng': this.position[0] };
+                if (debugAll) {
+                    console.log(`-> at ${currentTime} remember`, route_check);
+                }
+                g.route_check_array.push(route_check);
+                g.route_cache[currentName] = ''; // this way it only gets added to the array once
+            } else {
+                // this ensures that if eventually we get (and cache) the route, the plane
+                // information gets updated as we keep coming back to this function
+                this.routeString = g.route_cache[currentName];
+            }
+        }
+    }
+    if (useRouteAPI) {
+        // check if it's time to send a batch of request to the API server
+        if (currentTime > g.route_cache_timer) {
+            g.route_cache_timer = currentTime + 1;
+            // JavaScript doesn't interrupt running functions - so this should be safe to do
+            if (g.route_check_in_flight == false && g.route_check_array.length > 0) {
+                g.route_check_in_flight = true;
+                if (debugAll) {
+                    console.log(`next batch to send at ${currentTime}:`, g.route_check_array);
+                }
+                // grab up to the first 100 callsigns and leave the rest for later
+                var route_check_array = g.route_check_array.slice(0,100);
+                g.route_check_array = g.route_check_array.slice(100);
+                jQuery.ajax({
+                    type: "POST",
+                    url: routeApiUrl,
+                    contentType: 'application/json; charset=utf-8',
+                    dataType: 'json',
+                    data: JSON.stringify({ 'planes': route_check_array})})
+                    .done((routes) => {
+                        g.route_check_in_flight = false;
+                        if (debugAll) {
+                            console.log(routes);
+                        }
+                        for (var route of routes) {
+                            // let's log just a little bit of what's happening
+                            if (1 || debugAll) {
+                                var logText = `result for ${route.callsign}: `;
+                                if (route._airport_codes_iata == 'unknown') {
+                                    logText += 'unknown to the API server';
+                                } else if (route.plausible == false) {
+                                    logText += `${route._airport_codes_iata} considered implausible`;
+                                } else {
+                                    logText += `adding ${route._airport_codes_iata}`;
+                                }
+                                //console.log(logText);
+                            }
+                            if (route.airport_codes != 'unknown') {
+                                if (route.plausible == true) {
+                                    g.route_cache[route.callsign] = route._airport_codes_iata;
+                                } else {
+                                    g.route_cache[route.callsign] = `?? ${route._airport_codes_iata}`;
+                                }
+                            }
+                        }
+                    })
+                    .fail((jqxhr, status, error) => {
+                        g.route_check_in_flight = false;
+                        console.log('API server call failed with', status);
+                    });
+            } else {
+                if (debugAll) {
+                    console.log(`nothing to send to server at ${currentTime}`);
+                }
+            }
+        }
+    }
+}
+
 function normalizeTraceStamps(data) {
     if (!data || !data.trace) {
         console.log('normalizeTraceStamps: trace empty?')
         return null;
     }
     let trace = data.trace;
+    let last = 0;
     for (let i = 0; i < trace.length; i++) {
-        trace[i][0] += data.timestamp;
+        let point = trace[i];
+        point[0] += data.timestamp;
+        if (point[0] >= last) {
+            last = point[0];
+        } else {
+            console.log('normalize: trace backwards last: ' + last.toFixed(3) + ' current: ' + point[0].toFixed(3));
+        }
     }
+    data.timestamp = 0;
     return data;
 }

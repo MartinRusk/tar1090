@@ -3,6 +3,7 @@
 
 let NBSP='\u00a0';
 let NNBSP='\u202f';
+let NUMSP='\u2007';
 let DEGREES='\u00b0'
 let ENDASH='\u2013';
 let UP_TRIANGLE='\u25b2'; // U+25B2 BLACK UP-POINTING TRIANGLE
@@ -109,10 +110,10 @@ function format_altitude_brief(alt, vr, displayUnits, withUnits) {
 	} else if (vr < -245){
 		verticalRateTriangle = DOWN_TRIANGLE;
 	} else {
-		verticalRateTriangle = NNBSP;
+		verticalRateTriangle = ''
 	}
 
-	return alt_text + verticalRateTriangle;
+	return verticalRateTriangle + alt_text.padStart(5, NUMSP);
 }
 
 // alt in feet
@@ -400,14 +401,15 @@ function iOSVersion() {
 }
 
 function wqi(data) {
+    const INT32_MAX = 2147483647;
     const buffer = data.buffer;
     //console.log(buffer);
-    let vals = new Uint32Array(data.buffer, 0, 8);
-    data.now = vals[0] / 1000 + vals[1] * 4294967.296;
+    let u32 = new Uint32Array(data.buffer, 0, 12);
+    data.now = u32[0] / 1000 + u32[1] * 4294967.296;
     //console.log(data.now);
-    let stride = vals[2];
-    data.global_ac_count_withpos = vals[3];
-    data.globeIndex = vals[4];
+    let stride = u32[2];
+    data.global_ac_count_withpos = u32[3];
+    data.globeIndex = u32[4];
 
     let limits = new Int16Array(buffer, 20, 4);
     data.south =  limits[0];
@@ -415,11 +417,16 @@ function wqi(data) {
     data.north =  limits[2];
     data.east =  limits[3];
 
-    data.messages = vals[7];
+    data.messages = u32[7];
 
     let s32 = new Int32Array(data.buffer, 0, stride / 4);
     let receiver_lat = s32[8] / 1e6;
     let receiver_lon = s32[9] / 1e6;
+
+
+    const binCraftVersion = u32[10];
+
+    data.messageRate = u32[11] / 10;
 
     if (receiver_lat != 0 && receiver_lon != 0) {
         //console.log("receiver_lat: " + receiver_lat + " receiver_lon: " + receiver_lon);
@@ -445,8 +452,14 @@ function wqi(data) {
         let t = s32[0] & (1<<24);
         ac.hex = (s32[0] & ((1<<24) - 1)).toString(16).padStart(6, '0');
         ac.hex = t ? ('~' + ac.hex) : ac.hex;
-        ac.seen_pos = u16[2] / 10;
-        ac.seen = u16[3] / 10;
+
+        if (binCraftVersion >= 20240218) {
+            ac.seen = s32[1] / 10;
+            ac.seen_pos = s32[27] / 10;
+        } else {
+            ac.seen_pos = u16[2] / 10;
+            ac.seen = u16[3] / 10;
+        }
 
         ac.lon = s32[2] / 1e6;
         ac.lat = s32[3] / 1e6;
@@ -461,7 +474,12 @@ function wqi(data) {
         ac.nav_qnh = s16[14] / 10;
         ac.nav_heading = s16[15] / 90;
 
-        ac.squawk = u16[16].toString(16).padStart(4, '0');
+        const s = u16[16].toString(16).padStart(4, '0');
+        if (s[0] > '9') {
+            ac.squawk = String(parseInt(s[0], 16)) + s[1] + s[2] + s[3];
+        } else {
+            ac.squawk = s;
+        }
         ac.gs = s16[17] / 10;
         ac.mach = s16[18] / 1000;
         ac.roll = s16[19] / 100;
@@ -479,7 +497,12 @@ function wqi(data) {
         ac.tas = u16[28];
         ac.ias = u16[29];
         ac.rc  = u16[30];
-        ac.messages = u16[31];
+
+        if (globeIndex && binCraftVersion >= 20220916) {
+            ac.messageRate = u16[31] / 10;
+        } else {
+            ac.messages = u16[31];
+        }
 
         ac.category = u8[64] ? u8[64].toString(16).toUpperCase() : undefined;
         ac.nic      = u8[65];
@@ -529,7 +552,7 @@ function wqi(data) {
 
         ac.extraFlags = u8[106];
         ac.nogps = ac.extraFlags & 1;
-        if (ac.nogps && nogpsOnly) {
+        if (ac.nogps && nogpsOnly && s32[3] != INT32_MAX) {
             u8[73] |= 64;
             u8[73] |= 16;
         }
@@ -622,12 +645,66 @@ function wqi(data) {
         } else if (type4 == 'tisb') {
             ac.version = ac.tisb_version;
         }
-        if (stride == 112) {
-            ac.rId = u32[27].toString(16).padStart(8, '0');
-            //ac.rId = ac.rId.slice(0, 4) + '-' + ac.rId.slice(4);
+
+        if (binCraftVersion >= 20240218) {
+            if (stride == 116) {
+                ac.rId = u32[28].toString(16).padStart(8, '0');
+            }
+        } else {
+            if (stride == 112) {
+                ac.rId = u32[27].toString(16).padStart(8, '0');
+            }
         }
 
         data.aircraft.push(ac);
     }
 }
 
+function ItemCache(maxItems) {
+    this.maxItems = maxItems;
+    this.items = {};
+    this.keys = [];
+}
+ItemCache.prototype.clear = function() {
+    this.items = {};
+    this.keys = [];
+}
+ItemCache.prototype.get = function(key) {
+    return this.items[key];
+}
+ItemCache.prototype.add = function(key, value) {
+
+    if (!(key in this.items)) {
+        this.keys.push(key);
+    }
+    this.items[key] = value;
+
+    if (this.maxItems && this.maxItems > 0) {
+        while (this.keys.length > this.maxItems) {
+            const key = this.keys.shift();
+            delete this.items[key];
+        }
+    }
+}
+
+function itemCacheTest() {
+    let a = new ItemCache(4);
+    a.add(8, 4);
+    a.add(5, 2);
+    a.add(4, 2);
+    a.add(3, 2);
+    a.add(1, 2);
+    a.add(1, 3);
+    a.add(1, 5);
+    let items = JSON.stringify(a.items)
+    let keys = JSON.stringify(a.keys);
+    const expectedItems = '{"1":5,"3":2,"4":2,"5":2}';
+    const expectedKeys = '[5,4,3,1]';
+    if (items != expectedItems || keys != expectedKeys || g.get(1) != 5) {
+        console.error(`ItemCache broken!`);
+        console.log(`got:      items: ${items} keys: ${keys}`);
+        console.log(`expected: items: ${expectedItems} keys: ${expectedKeys}`);
+    } else {
+        console.log(`ItemCache tested correctly!`);
+    }
+}

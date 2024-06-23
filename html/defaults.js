@@ -18,7 +18,7 @@ let MessageRateInTitle = false;
 
 // -- Output Settings -------------------------------------
 // The DisplayUnits setting controls whether nautical (ft, nmi, kt),
-// metric (m, km, km/h) or imperial (ft, mi, mph) units are used in the 
+// metric (m, km, km/h) or imperial (ft, mi, mph) units are used in the
 // plane table and in the detailed plane info. Valid values are
 // "nautical", "metric", or "imperial".
 let DisplayUnits = "nautical";
@@ -34,6 +34,8 @@ let DefaultCenterLon = -73.66
 // The google maps zoom level, 0 - 16, lower is further out
 let DefaultZoomLvl   = 9;
 
+let autoselectCoords = null;
+
 let showGrid = false;
 
 // Center marker. If dump1090 provides a receiver location,
@@ -44,8 +46,12 @@ let SiteLat     = null;            // position of the marker
 let SiteLon     = null;
 let SiteName    = "My Radar Site"; // tooltip of the marker
 
+// Update GPS location (keep map centered on GPS location)
+let updateLocation = false;
+
 // Color controls for the range outline
 let range_outline_color = '#0000DD';
+let range_outline_alpha = 1.0;
 let range_outline_width = 1.7;
 let range_outline_colored_by_altitude = false;
 let range_outline_dash = null; // null - solid line, [5, 5] - dashed line with 5 pixel lines and spaces in between
@@ -58,7 +64,7 @@ let actual_range_outline_dash = null; // null - solid line, [5, 5] - dashed line
 let actual_range_show = true;
 
 // which map is displayed to new visitors
-let MapType_tar1090 = "osm_adsbx";
+let MapType_tar1090 = "osm";
 let defaultOverlays = [];
 let dwdLayers = 'dwd:RX-Produkt';
 
@@ -67,9 +73,28 @@ let MapDim = true;
 let mapDimPercentage = 0.45;
 let mapContrastPercentage = 0;
 
+// opacities for various overlays
+let nexradOpacity = 0.35
+let dwdRadolanOpacity = 0.30;
+let rainViewerRadarOpacity = 0.30;
+let rainViewerCloudsOpacity = 0.30;
+let noaaInfraredOpacity = 0.35;
+let noaaRadarOpacity = 0.35;
+let openAIPOpacity = 0.70;
+let tfrOpacity = 0.70;
+
 let offlineMapDetail = -1;
 
 // -- Marker settings -------------------------------------
+// (marker == aircraft icon)
+
+// aircraft icon opacity (normal and while the user is moving the map)
+let webglIconOpacity = 1.0;
+let webglIconMapMoveOpacity = 1.0;
+
+// if more than by default 2000 aircraft are on the screen, reduce icon opacity when moving the screen:
+let webglIconMapMoveOpacityCrowded = 0.25;
+let webglIconMapMoveOpacityCrowdedThreshold = 2000;
 
 // different marker size depending on zoom lvl
 let markerZoomDivide = 8.5;
@@ -89,11 +114,13 @@ let OutlineADSBColor = '#000000';
 let OutlineBPFVColor = '#FF4040';
 
 // Outline width for aircraft icons
-let outlineWidth = 1;
+let outlineWidth = 0.90;
 
 // constant html color for markers / tracks
 let monochromeMarkers = null;
 let monochromeTracks = null;
+
+let altitudeChartDefaultState = true;
 
 // These settings control the coloring of aircraft by altitude.
 // All color values are given as Hue (0-359) / Saturation (0-100) / Lightness (0-100)
@@ -196,8 +223,8 @@ let PageName = "tar1090";
 // Show country flags by ICAO addresses?
 let ShowFlags = true;
 
-// Path to country flags (can be a relative or absolute URL; include a trailing /)
-let FlagPath = "flags-tiny/";
+// UNUSED, kept here so config.js doesn't break for potential users
+let FlagPath = "";
 
 // Set to false to disable the ChartBundle base layers (US coverage only)
 let ChartBundleLayers = true;
@@ -236,6 +263,10 @@ let uatNoTISB = false;
 // Don't display any TIS-B planes
 let filterTISB = false;
 
+// image configuration link (back to a webUI for feeder setup)
+let imageConfigLink = "";
+let imageConfigText = "";
+
 let flightawareLinks = false;
 let shareBaseUrl = false;
 let planespottersLinks = false;
@@ -271,6 +302,7 @@ let HideCols = [
 	"#icao",
 //	"#flag",
 //	"#flight",
+//	"#route",
 	"#registration",
 //	"#aircraft_type",
 //	"#squawk",
@@ -286,6 +318,8 @@ let HideCols = [
 	"#lon",
 	"#data_source",
 	"#military",
+    "#wd",
+    "#ws",
 ]
 
 
@@ -293,8 +327,14 @@ let HideCols = [
 let showPictures = true;
 // get pictures from planespotters.net
 let planespottersAPI = true;
+let planespottersAPIurl = "https://api.planespotters.net/pub/photos/";
 // get pictures from planespotting.be
 let planespottingAPI = false;
+
+// get flight route from routeApi service
+let useRouteAPI = false;
+// which routeApi service to use
+let routeApiUrl = "https://api.adsb.lol/api/0/routeset";
 
 // show a link to jetphotos, only works if planespottersAPI is disabled
 let jetphotoLinks = false;
@@ -309,6 +349,7 @@ let showSil = false;
 
 let labelsGeom = false; // labels: uses geometric altitude (WGS84 ellipsoid unless geomUseEGM is enabled
 let geomUseEGM = false; // use EGM96 for displaying geometric altitudes (extra load time!)
+let baroUseQNH = false;
 
 let windLabelsSlim = false;
 let showLabelUnits = true;
@@ -329,9 +370,16 @@ let filterMaxRange = 1e8; // 100 000 km should include all planes on earth ;)
 
 let jaeroTimeout = 35 * 60; // in seconds
 
+let seenTimeout = 58; // in seconds
+let seenTimeoutMlat = 58; // in seconds
+
 let darkModeDefault = true; // turn on dark mode by default (change in browser possible)
 
 let tableInView = false; // only show aircraft in current view (V button)
+
+
+let aiscatcher_server = "";
+let aiscatcher_refresh = 15;
 
 // legacy variables
 let OutlineMlatColor = null;
@@ -367,3 +415,13 @@ let tableColors = {
         7700:      "#ff0000",
     }
 };
+
+let disableGeoLocation = false;
+
+// when data is available from both 1090 and 978, give some preference to the 978 data for up to X seconds old 978 data (set this to 15 or 30 for example)
+let prefer978 = 0;
+
+
+let dynGlobeRate = false; // enable use of globeRates.json in index.html directory to steer client refresh rate
+
+let multiOutline = false;

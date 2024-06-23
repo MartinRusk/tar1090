@@ -27,6 +27,9 @@
 // The google maps zoom level, 0 - 16, lower is further out
 //DefaultZoomLvl   = 7;
 
+// specify lat lon that the 'auto-select plane' feature will choose the closest plane to
+// autoselectCoords = [42, 21];
+
 // Center marker. If dump1090 provides a receiver location,
 // that location is used and these settings are ignored.
 
@@ -35,8 +38,12 @@
 //SiteLon     = 9.0;
 //SiteName    = "My Radar Site"; // tooltip of the marker
 
+// Update GPS location (keep map centered on GPS location)
+//updateLocation = false;
+
 // Color controls for the range outline
 //range_outline_color = '#0000DD';
+//range_outline_alpha = 1.0;
 //range_outline_width = 1.7;
 //range_outline_colored_by_altitude = false;
 //range_outline_dash = [5, 5]; // null - solid line, [5, 5] - dashed line with 5 pixel lines and spaces in between
@@ -47,6 +54,7 @@
 // actual_range_outline_width = 1.7;
 // actual_range_outline_dash = null; // null - solid line, [5, 5] - dashed line with 5 pixel lines and spaces in between
 
+// Enable / disable showing the actual range outline when first visiting the page
 // actual_range_show = true;
 
 // which map is displayed to new visitors
@@ -84,8 +92,26 @@
 // mapDimPercentage = 0.45;
 // mapContrastPercentage = 0;
 
+// opacities for various overlays
+// nexradOpacity = 0.35
+// dwdRadolanOpacity = 0.30;
+// rainViewerRadarOpacity = 0.30;
+// rainViewerCloudsOpacity = 0.30;
+// noaaInfraredOpacity = 0.35;
+// noaaRadarOpacity = 0.35;
+// openAIPOpacity = 0.70;
+// tfrOpacity = 0.70;
 
 // -- Marker settings -------------------------------------
+// (marker == aircraft icon)
+
+// aircraft icon opacity (normal and while the user is moving the map)
+// webglIconOpacity = 1.0;
+// webglIconMapMoveOpacity = 1.0;
+
+// if more than by default 2000 aircraft are on the screen, reduce icon opacity when moving the screen:
+// webglIconMapMoveOpacityCrowded = 0.25;
+// webglIconMapMoveOpacityCrowdedThreshold = 2000;
 
 // different marker size depending on zoom lvl
 // markerZoomDivide = 8.5;
@@ -107,6 +133,9 @@
 // constant html color for markers / tracks
 //monochromeMarkers = "#FFFFFF";
 //monochromeTracks = "#000000";
+//
+
+// altitudeChartDefaultState = true;
 
 // These settings control the coloring of aircraft by altitude.
 // All color values are given as Hue (0-359) / Saturation (0-100) / Lightness (0-100)
@@ -215,6 +244,14 @@ BingMapsAPIKey = null;
 // Don't display any TIS-B planes
 // filterTISB = false;
 
+// image configuration link (back to a webUI for feeder setup)
+// if the link is supposed to point to the same host that tar1090
+// is running on the token 'HOSTNAME' (without quotes) in the Link
+// text will be replaced with the current hostname at runtime
+//
+// imageConfigLink = "";
+// imageConfigText = "";
+
 //flightawareLinks = false;
 //shareBaseUrl = 'https://globe.adsbexchange.com/';
 // planespottersLinks = false;
@@ -251,6 +288,7 @@ HideCols = [
 	"#icao",
 //	"#flag",
 //	"#flight",
+//	"#route",
 	"#registration",
 //	"#aircraft_type",
 //	"#squawk",
@@ -265,6 +303,9 @@ HideCols = [
 	"#lat",
 	"#lon",
 	"#data_source",
+	"#military",
+    "#wd",
+    "#ws",
 ]
 */ // remove this line to modify columns (and the one at the start)
 
@@ -274,6 +315,11 @@ HideCols = [
 // planespottersAPI = true;
 // get pictures from planespotting.be
 // planespottingAPI = true;
+
+// get flight route from routeApi service
+// useRouteAPI = false;
+// which routeApi service to use
+// routeApiUrl = "https://api.adsb.lol/api/0/routeset";
 
 // show a link to jetphotos, only works if planespottersAPI is disabled
 // jetphotoLinks = false;
@@ -288,6 +334,7 @@ HideCols = [
 
 // labelsGeom = false; // labels: uses geometric altitude (WGS84 ellipsoid unless geomUseEGM is enabled
 // geomUseEGM = false; // use EGM96 for displaying geometric altitudes (extra load time!)
+// baroUseQNH = false;
 
 // windLabelsSlim = false;
 // showLabelUnits = true;
@@ -308,8 +355,18 @@ HideCols = [
 //
 //
 //darkModeDefault = true; // turn on dark mode by default (change in browser possible)
+//
+//
+//jaeroTimeout = 35 * 60; // in seconds
+
+//seenTimeout = 58; // in seconds
+//seenTimeoutMlat = 58; // in seconds
 
 //tableInView = false; // only show aircraft in current view (V button)
+
+
+// aiscatcher_server = "http://192.168.1.113:8100"; // update with your server address
+// aiscatcher_refresh = 15; // refresh interval in seconds
 
 /*
 tableColors = {
@@ -336,3 +393,11 @@ tableColors = {
     },
 };
 */
+
+
+// disableGeoLocation = false;
+
+// when data is available from both 1090 and 978, give some preference to the 978 data for up to X seconds old 978 data (set this to 15 or 30 for example)
+//prefer978 = 0;
+//
+// dynGlobeRate = false; // enable use of globeRates.json in index.html directory to steer client refresh rate

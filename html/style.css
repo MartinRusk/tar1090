@@ -95,6 +95,11 @@ select {
     width: 100%;
     height: 100%;
 }
+#iconTestCanvas {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+}
 
 .sidebar_button {
     width: calc( 32px * var(--SCALE));
@@ -164,6 +169,7 @@ select {
     cursor: ew-resize;
     display: block;
     position: absolute;
+    z-index: 99;
     top:  calc( 5px * var(--SCALE));
     left: calc( 0px * var(--SCALE));
     float: right;
@@ -242,7 +248,7 @@ select {
 }
 
 .error_box {
-    position: absolute; bottom: calc( 25px * var(--SCALE)); left: calc( 25px * var(--SCALE)); border: calc( 2px * var(--SCALE)) solid red;
+    position: absolute; bottom: calc( 90px * var(--SCALE)); left: calc( 25px * var(--SCALE)); border: calc( 2px * var(--SCALE)) solid red;
     background-color: #FFFFA3; opacity: 0.75; filter:alpha(opacity=75); padding: calc( 5px * var(--SCALE));
     color: black;
     font-weight: bold;
@@ -272,8 +278,8 @@ select {
     white-space: pre-line;
 }
 
-div#loader { z-index: 99; position: absolute; left: 0; top: 0; bottom: 0; right: 0; background: #000; opacity: 0.8; filter: alpha(opacity=80); }
-#loader_progress { width:  calc(250px * var(--SCALE)); height: calc( 20px * var(--SCALE)); position: absolute; top: 50%; left: 50%; margin:  calc(128px * var(--SCALE)) 0 0 - calc(125px * var(--SCALE)); }
+#loader {position: absolute; width: 25%; height: 30px; z-index: 9999; top: 50%; left: 37.5%}
+#loader_progress { width:  100%; height: 100%; position: absolute; }
 
 
 .aircraft_table_header {
@@ -441,6 +447,28 @@ select.error, textarea.error, input.error {
     z-index: 9;
 }
 
+.svgButton {
+    background-color: var(--ACCENT);
+    width: calc( 27px * var(--SCALE));
+    height: calc( 27px * var(--SCALE));
+    cursor: pointer;
+    background-position: center;
+    margin: calc( 2px * var(--SCALE));
+    display: inline-block;
+    border-radius: calc( 2px * var(--SCALE));
+}
+
+.fullscreenButton {
+    background-image: url('images/fullscreen.svg');
+    background-size: 90%;
+}
+
+.settingsCog {
+    background-image: url('images/cog-white.svg');
+    background-size: 120%;
+}
+
+
 .button {
     background-color: var(--ACCENT);
     width: calc( 27px * var(--SCALE));
@@ -477,18 +505,6 @@ select.error, textarea.error, input.error {
 }
 .inActiveButton {
  color:#fff
-}
-
-.settingsCog {
-    width: calc( 48px * var(--SCALE));
-    height: calc( 48px * var(--SCALE));
-    cursor: pointer;
-    background-image: url('images/settings-icon01.png');
-    background-size: cover;
-    background-repeat: no-repeat;
-    margin-top: calc( 6px * var(--SCALE));
-    margin-bottom: calc( 6px * var(--SCALE));
-    margin-left: calc( -12px * var(--SCALE));
 }
 
 #highlighted_infoblock {
@@ -859,8 +875,12 @@ input{
   grid-template-areas:
     "timezone dateHint timeHint speedHint"
     "play datepicker hours speedSelect"
-    ". . minutes ."
+    "loading . minutes ."
     ". . . .";
+}
+
+#replayLoading {
+  grid-area: loading;
 }
 
 #replayTimeZone{

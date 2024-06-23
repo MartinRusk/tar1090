@@ -729,12 +729,12 @@ let TypeDesignatorIcons = {
     'BALL': ['balloon', 1], // Balloon
 
     'A318': ['airliner', 0.90], // shortened a320 68t
-    'A319': ['airliner', 0.93], // shortened a320 75t
-    'A19N': ['airliner', 0.93], // shortened a320
-    'A320': ['airliner', 0.96], // 78t
-    'A20N': ['airliner', 0.96],
-    'A321': ['airliner', 0.99], // stretched a320 93t
-    'A21N': ['airliner', 0.99], // stretched a320
+    'A319': ['airliner', 0.92], // shortened a320 75t
+    'A19N': ['airliner', 0.92], // shortened a320
+    'A320': ['airliner', 0.94], // 78t
+    'A20N': ['airliner', 0.94],
+    'A321': ['airliner', 0.97], // stretched a320 93t
+    'A21N': ['airliner', 0.97], // stretched a320
 
     'A306': ['heavy_2e', 0.93],
     'A330': ['heavy_2e', 0.96],
@@ -752,18 +752,22 @@ let TypeDesignatorIcons = {
 
     // dubious since these are old-generation 737s
     // but the shape is similar
-    'B731': ['airliner', 0.88],
-    'B732': ['airliner', 0.88],
-    'B733': ['airliner', 0.90],
-    'B734': ['airliner', 0.94],
-    'B735': ['airliner', 0.96],
+    'B731': ['airliner', 0.86],
+    'B732': ['airliner', 0.86],
+    'B733': ['airliner', 0.87],
+    'B734': ['airliner', 0.91],
+    'B735': ['airliner', 0.93],
 
     // these probably need reworking
     // since they vary in length
-    'B736': ['airliner', 0.92],
-    'B737': ['airliner', 0.93],
-    'B738': ['airliner', 0.96],
-    'B739': ['airliner', 0.98],
+    'B736': ['airliner', 0.89],
+    'B737': ['airliner', 0.90],
+    'B738': ['airliner', 0.93],
+    'B739': ['airliner', 0.95],
+
+    'B37M': ['airliner', 0.92],
+    'B38M': ['airliner', 0.94],
+    'B39M': ['airliner', 0.96],
 
     'P8': ['airliner', 0.98],
     'P8 ?': ['airliner', 0.98],
@@ -1063,6 +1067,7 @@ let TypeDesignatorIcons = {
 
     'U2': ['u2', 1],
     'C2': ['c2', 1],
+    'E2': ['c2', 1],
     'H47': ['chinook', 1],
     'HAWK': ['bae_hawk', 1],
 
@@ -1305,7 +1310,7 @@ function getBaseMarker(category, typeDesignator, typeDescription, wtc, addrtype,
     return ['unknown', 1];
 }
 
-function svgShapeToURI(shape, fillColor, strokeColor, strokeWidth, scale){
+function svgShapeToSVG(shape, fillColor, strokeColor, strokeWidth, scale) {
     scale = scale ? scale : 1;
 
     strokeWidth *= (shape.strokeScale ? shape.strokeScale : 1);
@@ -1315,7 +1320,7 @@ function svgShapeToURI(shape, fillColor, strokeColor, strokeWidth, scale){
     if (!shape.path) {
         let svg = shape.svg.replace('fillColor', fillColor).replace('strokeColor', strokeColor).replace('strokeWidth', strokeWidth);
         svg = svg.replace('SIZE', 'width="' + wi + 'px" height="' + he + 'px"');
-        return "data:image/svg+xml;base64," + btoa(svg);
+        return svg;
     }
 
 
@@ -1343,6 +1348,11 @@ function svgShapeToURI(shape, fillColor, strokeColor, strokeWidth, scale){
 
     svg += '</g></svg>';
 
+    return svg;
+}
+
+function svgShapeToURI(shape, fillColor, strokeColor, strokeWidth, scale){
+    let svg = svgShapeToSVG(shape, fillColor, strokeColor, strokeWidth, scale);
     return "data:image/svg+xml;base64," + btoa(svg);
 }
 
@@ -1374,7 +1384,7 @@ function iconTest() {
     jQuery('.ol-control').hide();
     jQuery('.ol-attribution').show();
     jQuery("#loader").addClass("hidden");
-    let mapdiv = document.getElementById('map_canvas');
+    let mapdiv = document.getElementById('iconTestCanvas');
     console.log(mapdiv);
     let iconSize = glIconSize;
     let width = glImapWidth;
@@ -1382,8 +1392,11 @@ function iconTest() {
     mapdiv.innerHTML = '<div style="overflow: scroll; max-height: 100%; max-width: 100%"><canvas width="' + iconSize * width + '" height="' + iconSize * height + '" id="can"></canvas></div>';
     let can = document.getElementById('can');
     let con = can.getContext('2d');
-    for (let i in shapes) {
-        let shape = shapes[i];
+
+    let svgJson = {};
+
+    for (let shapeName in shapes) {
+        let shape = shapes[shapeName];
         if (getSpriteY(shape) / iconSize >= height) {
             console.log("make the canvas BIGGER!");
             mapdiv.innerHTML = '';
@@ -1399,20 +1412,26 @@ function iconTest() {
         else
             offX = diff / 2;
 
-        let svg = svgShapeToURI(shape, '#FFFFFF', '#000000', 0.75, scale);
         let img = document.createElement('img');
         img.onload = function () {
             con.drawImage(this, getSpriteX(shape) * glIconSize + offX, getSpriteY(shape) * glIconSize + offY);
         };
-        img.src = svg;
+        let svgURI = svgShapeToURI(shape, '#FFFFFF', '#000000', outlineWidth * 0.75, scale);
+        img.src = svgURI;
+
+        let svg = svgShapeToSVG(shape, '#FFFFFF', '#000000', outlineWidth * 0.75, 1.4);
+        svgJson[shapeName] = svg;
 
         if (usp.has('grid')) {
-            let svg = svgShapeToURI(refCross, '#FFFFFF', '#000000', 0.75, 1);
             let img = document.createElement('img');
             img.onload = function () {
                 con.drawImage(this, getSpriteX(shape) * glIconSize, getSpriteY(shape) * glIconSize);
             };
-            img.src = svg;
+            let svgURI = svgShapeToURI(refCross, '#FFFFFF', '#000000', 0.75, 1);
+            img.src = svgURI;
         }
     }
+
+    console.log(svgJson);
+    return can;
 }
